@@ -227,7 +227,7 @@ do_install() {
         echo "  3) $OPT3"
         printf "Выберите [1-3]: "
         CHOICE=""
-        read -r CHOICE || true
+        read -r CHOICE </dev/tty || true
         CHOICE=${CHOICE:-2}
         case "$CHOICE" in
             1) TARGET_DIR="$OPT1" ;;
@@ -252,7 +252,7 @@ do_install() {
             fi
             printf "Перезаписать? [y/N]: "
             ANSWER=""
-            read -r ANSWER || true
+            read -r ANSWER </dev/tty || true
             case "$ANSWER" in
                 y|Y|yes|YES) ;;
                 *) echo "Установка отменена."; exit 1 ;;
@@ -347,7 +347,7 @@ if [ "$INTERACTIVE" = "1" ]; then
         i=$((i + 1))
     done
     printf "Введите номер или версию: "
-    read -r CHOICE
+    read -r CHOICE </dev/tty
     case "$CHOICE" in
         ''|*[!0-9]*)
             case "$CHOICE" in
