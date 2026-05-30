@@ -28,7 +28,6 @@ EOF
 INTERACTIVE=0
 LIST_ONLY=0
 UPDATE_ONLY=0
-EXPLICIT_DIR=""
 REPO=""
 BIN=""
 VERSION=""
@@ -43,8 +42,8 @@ while [ $# -gt 0 ]; do
             if [ $# -lt 2 ]; then
                 echo "Флаг --dir требует аргумент" >&2; exit 1
             fi
-            EXPLICIT_DIR="$2"; shift 2 ;;
-        --dir=*) EXPLICIT_DIR="${1#--dir=}"; shift ;;
+            INSTALL_DIR="$2"; shift 2 ;;
+        --dir=*) INSTALL_DIR="${1#--dir=}"; shift ;;
         -*) echo "Неизвестный флаг: $1" >&2; usage >&2; exit 1 ;;
         *)
             if [ -z "$REPO" ]; then
@@ -252,9 +251,7 @@ if [ -n "$ACTUAL_VER" ] && [ "$ACTUAL_VER" != "$EXPECTED_VER" ]; then
     echo "Внимание: версия бинаря ($ACTUAL_VER) не совпадает с тегом ($EXPECTED_VER)" >&2
 fi
 
-if [ -n "$EXPLICIT_DIR" ]; then
-    TARGET_DIR="$EXPLICIT_DIR"
-elif [ -n "${INSTALL_DIR:-}" ]; then
+if [ -n "${INSTALL_DIR:-}" ]; then
     TARGET_DIR="$INSTALL_DIR"
 else
     case "$OS" in
