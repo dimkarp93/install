@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO="dimkarp93/install_scripts"
+REPO="dimkarp93/install"
 BRANCH="master"
 TARGET_NAME="github_install.sh"
 SRC_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}/install.sh"

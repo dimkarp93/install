@@ -1,4 +1,4 @@
-# install_scripts
+# install
 
 Универсальный установщик go-программ из GitHub Releases и шаблон CI-релиза.
 
@@ -7,7 +7,7 @@
 Чтобы не вводить длинный `curl`-однострочник каждый раз, установите `github_install.sh` в PATH один раз:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dimkarp93/install_scripts/master/local.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/local.sh | sh
 ```
 
 Клонировать репозиторий не нужно. `local.sh` сам скачает актуальный `install.sh` с master и установит его как `github_install.sh` в выбранный каталог (`/usr/bin`, `/usr/local/bin` или `~/.local/bin`).
@@ -23,14 +23,14 @@ github_install.sh owner/repo
 Если устанавливать `github_install.sh` не нужно, используйте one-liner напрямую:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dimkarp93/install_scripts/master/install.sh \
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/install.sh \
   | sh -s -- owner/repo
 ```
 
 Например, чтобы установить `envs`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dimkarp93/install_scripts/master/install.sh \
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/install.sh \
   | sh -s -- dimkarp93/envs
 ```
 
