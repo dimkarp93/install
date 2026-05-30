@@ -20,7 +20,8 @@ usage() {
 Переменные среды:
   INSTALL_DIR     каталог установки (--dir имеет приоритет)
   INSTALL_FORCE=1 перезаписать без подтверждения
-  GITHUB_TOKEN    токен для GitHub API (снимает лимит 60 req/h)
+  GITHUB_TOKEN    токен GitHub: снимает лимит 60 req/h и разрешает
+                  установку из приватных репозиториев
 EOF
 }
 
@@ -88,11 +89,9 @@ case "$(uname -m)" in
     *) echo "Неподдерживаемая архитектура: $(uname -m)" >&2; exit 1 ;;
 esac
 
-api_curl() {
+auth_header() {
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -fsSL -H "Authorization: token $GITHUB_TOKEN" "$@"
-    else
-        curl -fsSL "$@"
+        printf '%s' "-H \"Authorization: token $GITHUB_TOKEN\""
     fi
 }
 
@@ -110,6 +109,25 @@ api_get() {
     fi
     cat "$_out"
     rm -f "$_out"
+}
+
+download_file() {
+    _url="$1"
+    _dest="$2"
+    _show_progress="${3:-0}"
+    if [ "$_show_progress" = "1" ]; then
+        _progress="--progress-bar"
+    else
+        _progress="-sS"
+    fi
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        curl -fL $_progress \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/octet-stream" \
+            -o "$_dest" "$_url"
+    else
+        curl -fL $_progress -o "$_dest" "$_url"
+    fi
 }
 
 list_versions() {
@@ -188,12 +206,12 @@ ARCHIVE_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
 SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
 
 echo "Скачиваю $ARCHIVE_URL"
-if ! curl -fL --progress-bar -o "$TMPDIR/$ARCHIVE" "$ARCHIVE_URL"; then
+if ! download_file "$ARCHIVE_URL" "$TMPDIR/$ARCHIVE" 1; then
     echo "Не удалось скачать архив" >&2; exit 1
 fi
 
 echo "Скачиваю SHA256SUMS"
-if ! curl -fsSL -o "$TMPDIR/SHA256SUMS" "$SUMS_URL"; then
+if ! download_file "$SUMS_URL" "$TMPDIR/SHA256SUMS"; then
     echo "Не удалось скачать SHA256SUMS" >&2; exit 1
 fi
 

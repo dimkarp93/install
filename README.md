@@ -2,9 +2,27 @@
 
 Универсальный установщик go-программ из GitHub Releases и шаблон CI-релиза.
 
-## Установка программ
+## Установка самого установщика в PATH
 
-### Быстрый старт
+Чтобы не вводить длинный `curl`-однострочник каждый раз, установите `github_install.sh` в PATH один раз:
+
+```sh
+git clone https://github.com/dimkarp93/install_scripts ~/program/install_scripts
+cd ~/program/install_scripts
+sh local.sh
+```
+
+`local.sh` скопирует `install.sh` как `github_install.sh` в выбранный каталог (`/usr/bin`, `/usr/local/bin` или `~/.local/bin`).
+
+После этого установка любой программы выглядит так:
+
+```sh
+github_install.sh owner/repo
+```
+
+## Установка программ через curl (без клонирования репозитория)
+
+Если устанавливать `github_install.sh` не нужно, используйте one-liner напрямую:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dimkarp93/install_scripts/master/install.sh \
@@ -28,13 +46,15 @@ curl -fsSL https://raw.githubusercontent.com/dimkarp93/install_scripts/master/in
 ### Установка конкретной версии
 
 ```sh
+github_install.sh dimkarp93/envs envs 0.3.0
+# или через curl:
 curl -fsSL .../install.sh | sh -s -- dimkarp93/envs envs 0.3.0
 ```
 
 ### Интерактивный выбор версии
 
 ```sh
-curl -fsSL .../install.sh | sh -s -- -i dimkarp93/envs
+github_install.sh -i dimkarp93/envs
 ```
 
 ### Установить в конкретный каталог
@@ -42,27 +62,37 @@ curl -fsSL .../install.sh | sh -s -- -i dimkarp93/envs
 Через флаг:
 
 ```sh
-curl -fsSL .../install.sh | sh -s -- -d ~/.local/bin dimkarp93/envs
+github_install.sh -d ~/.local/bin dimkarp93/envs
 ```
 
 Через переменную среды:
 
 ```sh
-INSTALL_DIR=~/.local/bin curl -fsSL .../install.sh | sh -s -- dimkarp93/envs
+INSTALL_DIR=~/.local/bin github_install.sh dimkarp93/envs
 ```
 
 ### Список доступных версий
 
 ```sh
-curl -fsSL .../install.sh | sh -s -- --list dimkarp93/envs
+github_install.sh --list dimkarp93/envs
 ```
+
+### Приватные репозитории
+
+Для установки из приватного репозитория передайте GitHub-токен с правом `contents: read`:
+
+```sh
+GITHUB_TOKEN=ghp_... github_install.sh owner/private-repo
+```
+
+Токен используется как при запросах к GitHub API (получение списка релизов), так и при скачивании архива и `SHA256SUMS`. Без токена приватный репозиторий недоступен.
 
 ### GitHub API rate-limit
 
-По умолчанию GitHub API разрешает 60 запросов в час без авторизации. Если hit лимит — передайте токен:
+По умолчанию GitHub API разрешает 60 запросов в час без авторизации. При частом использовании передайте токен:
 
 ```sh
-GITHUB_TOKEN=ghp_... curl -fsSL .../install.sh | sh -s -- dimkarp93/envs
+GITHUB_TOKEN=ghp_... github_install.sh dimkarp93/envs
 ```
 
 ## Обновление
@@ -70,24 +100,24 @@ GITHUB_TOKEN=ghp_... curl -fsSL .../install.sh | sh -s -- dimkarp93/envs
 Обновление — это повторная установка. Скрипт покажет текущую версию и спросит подтверждение:
 
 ```sh
-curl -fsSL .../install.sh | sh -s -- dimkarp93/envs
+github_install.sh dimkarp93/envs
 ```
 
 Чтобы обновить только если доступна более новая версия:
 
 ```sh
-curl -fsSL .../install.sh | sh -s -- -u dimkarp93/envs
+github_install.sh -u dimkarp93/envs
 ```
 
 Чтобы обновить без подтверждения:
 
 ```sh
-INSTALL_FORCE=1 curl -fsSL .../install.sh | sh -s -- dimkarp93/envs
+INSTALL_FORCE=1 github_install.sh dimkarp93/envs
 ```
 
 ## Требования к программам
 
-Чтобы программа устанавливалась через `install.sh`, она должна:
+Чтобы программа устанавливалась через `github_install.sh`, она должна:
 
 1. **Быть опубликована на GitHub** с тегами вида `vMAJOR.MINOR.PATCH`.
 2. **Иметь `versions.txt`** в корне репозитория с голым semver (`0.4.0`).
