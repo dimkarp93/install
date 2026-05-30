@@ -75,6 +75,45 @@ INSTALL_DIR=~/.local/bin github_install.sh dimkarp93/envs
 github_install.sh --list dimkarp93/envs
 ```
 
+### Только скачать архив без установки
+
+Флаг `-D` / `--download` скачивает архив и `SHA256SUMS`, проверяет контрольную сумму и выводит полный путь до архива. Установки не происходит.
+
+```sh
+github_install.sh -D dimkarp93/envs
+```
+
+По умолчанию файлы сохраняются в текущий каталог. Чтобы указать другой:
+
+```sh
+github_install.sh -D -d /tmp/downloads dimkarp93/envs
+# или
+INSTALL_DIR=/tmp/downloads github_install.sh -D dimkarp93/envs
+```
+
+Вывод на успех — только путь до архива (пригоден для скриптов):
+
+```
+/tmp/downloads/envs-linux-amd64.tar.gz
+```
+
+### Установка из локального архива
+
+Флаг `-F` / `--from-file` устанавливает программу из уже скачанного архива. SHA256SUMS должен лежать рядом с архивом. Флаги версии, `-i` и `-u` игнорируются.
+
+```sh
+github_install.sh -F /tmp/downloads/envs-linux-amd64.tar.gz
+```
+
+Это прямая замена двухшаговой установке — скачать, затем установить:
+
+```sh
+ARCHIVE=$(github_install.sh -D -d /tmp dimkarp93/envs)
+github_install.sh -F "$ARCHIVE"
+```
+
+Двухшаговый вариант полезен, если нужно проверить архив вручную между загрузкой и установкой, или установить одно и то же на несколько машин без повторного скачивания.
+
 ### Приватные репозитории
 
 Для установки из приватного репозитория передайте GitHub-токен с правом `contents: read`:

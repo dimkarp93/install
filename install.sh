@@ -4,21 +4,27 @@ set -eu
 usage() {
     cat <<EOF
 Использование: $(basename "$0") [ФЛАГИ] <владелец/репозиторий> [имя-бинаря] [версия]
+         или: $(basename "$0") -F <архив.tar.gz> [имя-бинаря]
 
 Скачивает и устанавливает go-программу из GitHub Releases.
 
-  -i           выбрать версию интерактивно из списка
-  -l, --list   вывести доступные версии и выйти
-  -u, --update установить, только если доступная версия новее текущей
-  -d, --dir DIR  каталог установки (переопределяет INSTALL_DIR)
-  -h, --help   эта справка
+  -i               выбрать версию интерактивно из списка
+  -l, --list       вывести доступные версии и выйти
+  -u, --update     установить, только если доступная версия новее текущей
+  -D, --download   только скачать архив + SHA256SUMS и проверить сумму;
+                   вывести путь до архива; каталог задаётся через -d/INSTALL_DIR
+                   (по умолчанию: текущий каталог)
+  -F, --from-file  установить из локального архива (проверив SHA256SUMS рядом);
+                   игнорирует версию, -i, -u; имя-бинаря берётся из имени файла
+  -d, --dir DIR    каталог установки (переопределяет INSTALL_DIR)
+  -h, --help       эта справка
 
   <владелец/репозиторий>  например: dimkarp93/envs
   [имя-бинаря]            имя исполняемого файла (по умолчанию: имя репозитория)
-  [версия]                semver вида 1.2.3 или v1.2.3 (по умолчанию: latest); игнорируется при -i
+  [версия]                semver вида 1.2.3 или v1.2.3 (по умолчанию: latest)
 
 Переменные среды:
-  INSTALL_DIR     каталог установки (--dir имеет приоритет)
+  INSTALL_DIR     каталог установки / каталог для скачивания (-d имеет приоритет)
   INSTALL_FORCE=1 перезаписать без подтверждения
   GITHUB_TOKEN    токен GitHub: снимает лимит 60 req/h и разрешает
                   установку из приватных репозиториев
@@ -28,6 +34,8 @@ EOF
 INTERACTIVE=0
 LIST_ONLY=0
 UPDATE_ONLY=0
+DOWNLOAD_ONLY=0
+FROM_FILE=""
 REPO=""
 BIN=""
 VERSION=""
@@ -38,6 +46,13 @@ while [ $# -gt 0 ]; do
         -i) INTERACTIVE=1; shift ;;
         -l|--list) LIST_ONLY=1; shift ;;
         -u|--update) UPDATE_ONLY=1; shift ;;
+        -D|--download) DOWNLOAD_ONLY=1; shift ;;
+        -F|--from-file)
+            if [ $# -lt 2 ]; then
+                echo "Флаг --from-file требует аргумент" >&2; exit 1
+            fi
+            FROM_FILE="$2"; shift 2 ;;
+        --from-file=*) FROM_FILE="${1#--from-file=}"; shift ;;
         -d|--dir)
             if [ $# -lt 2 ]; then
                 echo "Флаг --dir требует аргумент" >&2; exit 1
@@ -57,21 +72,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "$REPO" ]; then
-    echo "Ошибка: укажите владелец/репозиторий" >&2
-    usage >&2
-    exit 1
-fi
-
-case "$REPO" in
-    */*)  ;;
-    *) echo "Ошибка: формат должен быть владелец/репозиторий (например, dimkarp93/envs)" >&2; exit 1 ;;
-esac
-
-if [ -z "$BIN" ]; then
-    BIN="${REPO##*/}"
-fi
-
 if ! command -v curl >/dev/null 2>&1; then
     echo "Требуется curl" >&2; exit 1
 fi
@@ -88,11 +88,43 @@ case "$(uname -m)" in
     *) echo "Неподдерживаемая архитектура: $(uname -m)" >&2; exit 1 ;;
 esac
 
-auth_header() {
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        printf '%s' "-H \"Authorization: token $GITHUB_TOKEN\""
+# --- валидация аргументов ---
+
+if [ -n "$FROM_FILE" ]; then
+    if [ ! -f "$FROM_FILE" ]; then
+        echo "Файл не найден: $FROM_FILE" >&2; exit 1
     fi
-}
+    # первый позиционный (REPO) без '/' трактуем как имя бинаря
+    if [ -n "$REPO" ] && [ -z "$BIN" ]; then
+        case "$REPO" in
+            */*) ;;
+            *) BIN="$REPO" ;;
+        esac
+    fi
+    if [ -z "$BIN" ]; then
+        _base=$(basename "$FROM_FILE" .tar.gz)
+        BIN="${_base%-${OS}-${ARCH}}"
+        if [ -z "$BIN" ] || [ "$BIN" = "$(basename "$FROM_FILE" .tar.gz)" ]; then
+            echo "Не удалось определить имя бинаря из имени файла: $(basename "$FROM_FILE")" >&2
+            echo "Укажите имя явно: $(basename "$0") -F $FROM_FILE <имя-бинаря>" >&2
+            exit 1
+        fi
+    fi
+else
+    if [ -z "$REPO" ]; then
+        echo "Ошибка: укажите владелец/репозиторий" >&2
+        usage >&2; exit 1
+    fi
+    case "$REPO" in
+        */*)  ;;
+        *) echo "Ошибка: формат должен быть владелец/репозиторий (например, dimkarp93/envs)" >&2; exit 1 ;;
+    esac
+    if [ -z "$BIN" ]; then
+        BIN="${REPO##*/}"
+    fi
+fi
+
+# --- вспомогательные функции ---
 
 api_get() {
     _url="$1"
@@ -129,6 +161,27 @@ download_file() {
     fi
 }
 
+check_sha256() {
+    _archive="$1"
+    _sums="$2"
+    _name=$(basename "$_archive")
+    if command -v sha256sum >/dev/null 2>&1; then
+        _dir=$(dirname "$_archive")
+        (cd "$_dir" && grep " ${_name}$" "$_sums" | sha256sum -c --quiet -) || {
+            echo "Проверка SHA256 не прошла — архив повреждён или подменён" >&2; return 1
+        }
+    elif command -v shasum >/dev/null 2>&1; then
+        _expected=$(grep " ${_name}$" "$_sums" | awk '{print $1}')
+        _actual=$(shasum -a 256 "$_archive" | awk '{print $1}')
+        if [ "$_expected" != "$_actual" ]; then
+            echo "Проверка SHA256 не прошла — архив повреждён или подменён" >&2; return 1
+        fi
+    else
+        echo "Внимание: sha256sum/shasum не найдены, проверка целостности пропущена" >&2
+    fi
+    echo "Контрольная сумма совпадает"
+}
+
 list_versions() {
     api_get "https://api.github.com/repos/${REPO}/releases?per_page=100" \
         | grep '"tag_name":' \
@@ -141,10 +194,136 @@ resolve_latest() {
         | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
 
+do_install() {
+    _bin_path="$1"
+    _bin_ver="${2:-}"
+
+    if [ -n "${INSTALL_DIR:-}" ]; then
+        TARGET_DIR="$INSTALL_DIR"
+    else
+        case "$OS" in
+            linux)
+                OPT1="/usr/bin"
+                OPT2="/usr/local/bin"
+                OPT3="$HOME/.local/bin"
+                ;;
+            darwin)
+                OPT1="/usr/local/bin"
+                OPT2="/opt/homebrew/bin"
+                OPT3="$HOME/.local/bin"
+                ;;
+        esac
+        echo "Куда установить $BIN?"
+        echo "  1) $OPT1"
+        echo "  2) $OPT2   (по умолчанию)"
+        echo "  3) $OPT3"
+        printf "Выберите [1-3]: "
+        CHOICE=""
+        read -r CHOICE || true
+        CHOICE=${CHOICE:-2}
+        case "$CHOICE" in
+            1) TARGET_DIR="$OPT1" ;;
+            2) TARGET_DIR="$OPT2" ;;
+            3) TARGET_DIR="$OPT3" ;;
+            *) echo "Некорректный выбор: $CHOICE" >&2; exit 1 ;;
+        esac
+    fi
+
+    TARGET="$TARGET_DIR/$BIN"
+
+    if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
+        if [ "${INSTALL_FORCE:-}" != "1" ]; then
+            CUR_VER=""
+            if [ -x "$TARGET" ]; then
+                CUR_VER=$("$TARGET" --version 2>/dev/null || true)
+            fi
+            if [ -n "$CUR_VER" ]; then
+                echo "Файл $TARGET уже существует (версия: $CUR_VER)."
+            else
+                echo "Файл $TARGET уже существует."
+            fi
+            printf "Перезаписать? [y/N]: "
+            ANSWER=""
+            read -r ANSWER || true
+            case "$ANSWER" in
+                y|Y|yes|YES) ;;
+                *) echo "Установка отменена."; exit 1 ;;
+            esac
+        fi
+    fi
+
+    if [ -w "$TARGET_DIR" ] || { [ ! -e "$TARGET_DIR" ] && mkdir -p "$TARGET_DIR" 2>/dev/null; }; then
+        SUDO=""
+    else
+        if command -v sudo >/dev/null 2>&1; then
+            SUDO="sudo"
+        else
+            echo "Каталог $TARGET_DIR недоступен на запись и sudo не найден." >&2; exit 1
+        fi
+    fi
+
+    $SUDO mkdir -p "$TARGET_DIR"
+    $SUDO install -m 0755 "$_bin_path" "$TARGET"
+
+    echo "Установлено: $TARGET${_bin_ver:+ (версия $_bin_ver)}"
+
+    case ":${PATH:-}:" in
+        *":$TARGET_DIR:"*) ;;
+        *)
+            echo
+            echo "Внимание: $TARGET_DIR отсутствует в PATH."
+            echo "Добавьте в ~/.profile или ~/.bashrc / ~/.zshrc строку:"
+            echo "    export PATH=\"$TARGET_DIR:\$PATH\""
+            ;;
+    esac
+}
+
+extract_bin() {
+    _archive="$1"
+    _workdir="$2"
+    tar -C "$_workdir" --no-same-owner -xzf "$_archive"
+    if [ -x "$_workdir/$BIN" ]; then
+        echo "$_workdir/$BIN"
+    elif [ -x "$_workdir/${BIN}-${OS}-${ARCH}/$BIN" ]; then
+        echo "$_workdir/${BIN}-${OS}-${ARCH}/$BIN"
+    else
+        echo "Исполняемый файл '$BIN' не найден в архиве" >&2; return 1
+    fi
+}
+
+# --- режим: только список версий ---
+
 if [ "$LIST_ONLY" = "1" ]; then
     list_versions
     exit 0
 fi
+
+# --- режим: установка из локального архива ---
+
+if [ -n "$FROM_FILE" ]; then
+    ARCHIVE_PATH=$(cd "$(dirname "$FROM_FILE")" && pwd)/$(basename "$FROM_FILE")
+    SUMS_PATH="$(dirname "$ARCHIVE_PATH")/SHA256SUMS"
+
+    if [ ! -f "$SUMS_PATH" ]; then
+        echo "Не найден SHA256SUMS рядом с архивом: $SUMS_PATH" >&2; exit 1
+    fi
+
+    echo "Проверяю контрольную сумму $ARCHIVE_PATH"
+    check_sha256 "$ARCHIVE_PATH" "$SUMS_PATH" || exit 1
+
+    WORKDIR=$(mktemp -d)
+    trap 'rm -rf "$WORKDIR"' EXIT
+
+    echo "Распаковываю"
+    BIN_PATH=$(extract_bin "$ARCHIVE_PATH" "$WORKDIR") || exit 1
+    chmod +x "$BIN_PATH"
+
+    BIN_VER=$("$BIN_PATH" --version 2>/dev/null || true)
+    do_install "$BIN_PATH" "$BIN_VER"
+    exit 0
+fi
+
+# --- разрешение тега (сетевые режимы) ---
 
 if [ "$INTERACTIVE" = "1" ]; then
     VERSIONS=$(list_versions)
@@ -183,6 +362,39 @@ else
     esac
 fi
 
+ARCHIVE="${BIN}-${OS}-${ARCH}.tar.gz"
+ARCHIVE_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
+SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
+
+# --- режим: только скачать ---
+
+if [ "$DOWNLOAD_ONLY" = "1" ]; then
+    DEST_DIR="${INSTALL_DIR:-$(pwd)}"
+    mkdir -p "$DEST_DIR"
+
+    echo "Скачиваю $ARCHIVE_URL"
+    if ! download_file "$ARCHIVE_URL" "$DEST_DIR/$ARCHIVE" 1; then
+        echo "Не удалось скачать архив" >&2; exit 1
+    fi
+
+    echo "Скачиваю SHA256SUMS"
+    if ! download_file "$SUMS_URL" "$DEST_DIR/SHA256SUMS"; then
+        echo "Не удалось скачать SHA256SUMS" >&2; exit 1
+    fi
+
+    check_sha256 "$DEST_DIR/$ARCHIVE" "$DEST_DIR/SHA256SUMS" || {
+        rm -f "$DEST_DIR/$ARCHIVE" "$DEST_DIR/SHA256SUMS"
+        exit 1
+    }
+
+    # единственный вывод в stdout — путь до архива (остальное шло в stderr через echo)
+    DEST_ABS=$(cd "$DEST_DIR" && pwd)/$ARCHIVE
+    echo "$DEST_ABS"
+    exit 0
+fi
+
+# --- режим: полная установка ---
+
 if [ "$UPDATE_ONLY" = "1" ]; then
     CURRENT=""
     if command -v "$BIN" >/dev/null 2>&1; then
@@ -200,10 +412,6 @@ TMPDIR=$(mktemp -d)
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
-ARCHIVE="${BIN}-${OS}-${ARCH}.tar.gz"
-ARCHIVE_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
-SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
-
 echo "Скачиваю $ARCHIVE_URL"
 if ! download_file "$ARCHIVE_URL" "$TMPDIR/$ARCHIVE" 1; then
     echo "Не удалось скачать архив" >&2; exit 1
@@ -215,34 +423,10 @@ if ! download_file "$SUMS_URL" "$TMPDIR/SHA256SUMS"; then
 fi
 
 echo "Проверяю контрольную сумму"
-if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$TMPDIR" && grep " ${ARCHIVE}$" SHA256SUMS | sha256sum -c --quiet -) || {
-        echo "Проверка SHA256 не прошла — архив повреждён или подменён" >&2; exit 1
-    }
-elif command -v shasum >/dev/null 2>&1; then
-    EXPECTED=$(grep " ${ARCHIVE}$" "$TMPDIR/SHA256SUMS" | awk '{print $1}')
-    ACTUAL=$(shasum -a 256 "$TMPDIR/$ARCHIVE" | awk '{print $1}')
-    if [ "$EXPECTED" != "$ACTUAL" ]; then
-        echo "Проверка SHA256 не прошла — архив повреждён или подменён" >&2; exit 1
-    fi
-else
-    echo "Внимание: sha256sum/shasum не найдены, проверка целостности пропущена" >&2
-fi
-echo "Контрольная сумма совпадает"
+check_sha256 "$TMPDIR/$ARCHIVE" "$TMPDIR/SHA256SUMS" || exit 1
 
 echo "Распаковываю"
-tar -C "$TMPDIR" --no-same-owner -xzf "$TMPDIR/$ARCHIVE"
-
-BIN_PATH=""
-if [ -x "$TMPDIR/$BIN" ]; then
-    BIN_PATH="$TMPDIR/$BIN"
-elif [ -x "$TMPDIR/${BIN}-${OS}-${ARCH}/$BIN" ]; then
-    BIN_PATH="$TMPDIR/${BIN}-${OS}-${ARCH}/$BIN"
-fi
-
-if [ -z "$BIN_PATH" ]; then
-    echo "Исполняемый файл '$BIN' не найден в архиве" >&2; exit 1
-fi
+BIN_PATH=$(extract_bin "$TMPDIR/$ARCHIVE" "$TMPDIR") || exit 1
 chmod +x "$BIN_PATH"
 
 EXPECTED_VER="${TAG#v}"
@@ -251,83 +435,4 @@ if [ -n "$ACTUAL_VER" ] && [ "$ACTUAL_VER" != "$EXPECTED_VER" ]; then
     echo "Внимание: версия бинаря ($ACTUAL_VER) не совпадает с тегом ($EXPECTED_VER)" >&2
 fi
 
-if [ -n "${INSTALL_DIR:-}" ]; then
-    TARGET_DIR="$INSTALL_DIR"
-else
-    case "$OS" in
-        linux)
-            OPT1="/usr/bin"
-            OPT2="/usr/local/bin"
-            OPT3="$HOME/.local/bin"
-            ;;
-        darwin)
-            OPT1="/usr/local/bin"
-            OPT2="/opt/homebrew/bin"
-            OPT3="$HOME/.local/bin"
-            ;;
-    esac
-    echo "Куда установить $BIN?"
-    echo "  1) $OPT1"
-    echo "  2) $OPT2   (по умолчанию)"
-    echo "  3) $OPT3"
-    printf "Выберите [1-3]: "
-    CHOICE=""
-    read -r CHOICE || true
-    CHOICE=${CHOICE:-2}
-    case "$CHOICE" in
-        1) TARGET_DIR="$OPT1" ;;
-        2) TARGET_DIR="$OPT2" ;;
-        3) TARGET_DIR="$OPT3" ;;
-        *) echo "Некорректный выбор: $CHOICE" >&2; exit 1 ;;
-    esac
-fi
-
-TARGET="$TARGET_DIR/$BIN"
-
-if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
-    if [ "${INSTALL_FORCE:-}" = "1" ]; then
-        :
-    else
-        CUR_VER=""
-        if [ -x "$TARGET" ]; then
-            CUR_VER=$("$TARGET" --version 2>/dev/null || true)
-        fi
-        if [ -n "$CUR_VER" ]; then
-            echo "Файл $TARGET уже существует (версия: $CUR_VER)."
-        else
-            echo "Файл $TARGET уже существует."
-        fi
-        printf "Перезаписать? [y/N]: "
-        ANSWER=""
-        read -r ANSWER || true
-        case "$ANSWER" in
-            y|Y|yes|YES) ;;
-            *) echo "Установка отменена."; exit 1 ;;
-        esac
-    fi
-fi
-
-if [ -w "$TARGET_DIR" ] || { [ ! -e "$TARGET_DIR" ] && mkdir -p "$TARGET_DIR" 2>/dev/null; }; then
-    SUDO=""
-else
-    if command -v sudo >/dev/null 2>&1; then
-        SUDO="sudo"
-    else
-        echo "Каталог $TARGET_DIR недоступен на запись и sudo не найден." >&2; exit 1
-    fi
-fi
-
-$SUDO mkdir -p "$TARGET_DIR"
-$SUDO install -m 0755 "$BIN_PATH" "$TARGET"
-
-echo "Установлено: $TARGET (версия ${ACTUAL_VER:-$EXPECTED_VER})"
-
-case ":${PATH:-}:" in
-    *":$TARGET_DIR:"*) ;;
-    *)
-        echo
-        echo "Внимание: $TARGET_DIR отсутствует в PATH."
-        echo "Добавьте в ~/.profile или ~/.bashrc / ~/.zshrc строку:"
-        echo "    export PATH=\"$TARGET_DIR:\$PATH\""
-        ;;
-esac
+do_install "$BIN_PATH" "${ACTUAL_VER:-$EXPECTED_VER}"
