@@ -119,9 +119,6 @@ else
         */*)  ;;
         *) echo "Ошибка: формат должен быть владелец/репозиторий (например, dimkarp93/envs)" >&2; exit 1 ;;
     esac
-    if [ -z "$BIN" ]; then
-        BIN="${REPO##*/}"
-    fi
 fi
 
 # --- вспомогательные функции ---
@@ -188,10 +185,21 @@ list_versions() {
         | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
 
-resolve_latest() {
-    _json=$(api_get "https://api.github.com/repos/${REPO}/releases/latest") || return 1
-    echo "$_json" | grep '"tag_name":' | head -1 \
-        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
+get_release() {
+    _tag="${1:-}"
+    if [ -z "$_tag" ]; then
+        api_get "https://api.github.com/repos/${REPO}/releases/latest"
+    else
+        api_get "https://api.github.com/repos/${REPO}/releases/tags/${_tag}"
+    fi
+}
+
+discover_bin() {
+    echo "$1" | grep '"name":' \
+        | grep "\"[^\"]*-${OS}-${ARCH}\.tar\.gz\"" \
+        | sed -E 's/.*"name": *"([^"]+)".*/\1/' \
+        | head -1 \
+        | sed -E "s/-${OS}-${ARCH}\\.tar\\.gz\$//"
 }
 
 do_install() {
@@ -325,6 +333,8 @@ fi
 
 # --- разрешение тега (сетевые режимы) ---
 
+RELEASE_JSON=""
+
 if [ "$INTERACTIVE" = "1" ]; then
     VERSIONS=$(list_versions)
     if [ -z "$VERSIONS" ]; then
@@ -351,7 +361,9 @@ if [ "$INTERACTIVE" = "1" ]; then
             fi ;;
     esac
 elif [ -z "$VERSION" ]; then
-    TAG=$(resolve_latest) || exit 1
+    RELEASE_JSON=$(get_release) || exit 1
+    TAG=$(echo "$RELEASE_JSON" | grep '"tag_name":' | head -1 \
+        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [ -z "$TAG" ]; then
         echo "Не удалось определить последнюю версию" >&2; exit 1
     fi
@@ -360,6 +372,20 @@ else
         v*) TAG="$VERSION" ;;
         *)  TAG="v$VERSION" ;;
     esac
+fi
+
+# --- автообнаружение имени бинаря из ассетов релиза ---
+
+if [ -z "$BIN" ]; then
+    if [ -z "$RELEASE_JSON" ]; then
+        RELEASE_JSON=$(get_release "$TAG") || exit 1
+    fi
+    BIN=$(discover_bin "$RELEASE_JSON")
+    if [ -z "$BIN" ]; then
+        echo "Не найден ассет *-${OS}-${ARCH}.tar.gz в релизе ${TAG}" >&2
+        echo "Укажите имя бинаря явно: $(basename "$0") $REPO <имя-бинаря>" >&2
+        exit 1
+    fi
 fi
 
 ARCHIVE="${BIN}-${OS}-${ARCH}.tar.gz"
