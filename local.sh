@@ -32,7 +32,7 @@ echo "  2) $OPT2   (по умолчанию)"
 echo "  3) $OPT3"
 printf "Выберите [1-3]: "
 CHOICE=""
-read -r CHOICE || true
+read -r CHOICE </dev/tty || true
 CHOICE=${CHOICE:-2}
 case "$CHOICE" in
     1) TARGET_DIR="$OPT1" ;;
@@ -46,7 +46,7 @@ TARGET="$TARGET_DIR/$TARGET_NAME"
 if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
     printf "Файл %s уже существует. Перезаписать? [y/N]: " "$TARGET"
     ANSWER=""
-    read -r ANSWER || true
+    read -r ANSWER </dev/tty || true
     case "$ANSWER" in
         y|Y|yes|YES) ;;
         *) echo "Установка отменена."; exit 1 ;;
