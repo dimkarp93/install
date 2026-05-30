@@ -7,12 +7,10 @@
 Чтобы не вводить длинный `curl`-однострочник каждый раз, установите `github_install.sh` в PATH один раз:
 
 ```sh
-git clone https://github.com/dimkarp93/install_scripts ~/program/install_scripts
-cd ~/program/install_scripts
-sh local.sh
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install_scripts/master/local.sh | sh
 ```
 
-`local.sh` скопирует `install.sh` как `github_install.sh` в выбранный каталог (`/usr/bin`, `/usr/local/bin` или `~/.local/bin`).
+Клонировать репозиторий не нужно. `local.sh` сам скачает актуальный `install.sh` с master и установит его как `github_install.sh` в выбранный каталог (`/usr/bin`, `/usr/local/bin` или `~/.local/bin`).
 
 После этого установка любой программы выглядит так:
 
@@ -20,7 +18,7 @@ sh local.sh
 github_install.sh owner/repo
 ```
 
-## Установка программ через curl (без клонирования репозитория)
+## Установка программ через curl (без `github_install.sh`)
 
 Если устанавливать `github_install.sh` не нужно, используйте one-liner напрямую:
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-SRC="$SCRIPT_DIR/install.sh"
+REPO="dimkarp93/install_scripts"
+BRANCH="master"
 TARGET_NAME="github_install.sh"
+SRC_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}/install.sh"
 
-if [ ! -f "$SRC" ]; then
-    echo "Не найден install.sh рядом со скриптом: $SRC" >&2
-    exit 1
+if ! command -v curl >/dev/null 2>&1; then
+    echo "Требуется curl" >&2; exit 1
 fi
 
 OS=$(uname -s)
@@ -23,9 +23,7 @@ case "$OS" in
         OPT3="$HOME/.local/bin"
         ;;
     *)
-        echo "Неподдерживаемая ОС: $OS" >&2
-        exit 1
-        ;;
+        echo "Неподдерживаемая ОС: $OS" >&2; exit 1 ;;
 esac
 
 echo "Куда установить $TARGET_NAME?"
@@ -61,13 +59,20 @@ else
     if command -v sudo >/dev/null 2>&1; then
         SUDO="sudo"
     else
-        echo "Каталог $TARGET_DIR недоступен на запись и sudo не найден." >&2
-        exit 1
+        echo "Каталог $TARGET_DIR недоступен на запись и sudo не найден." >&2; exit 1
     fi
 fi
 
+TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE"' EXIT
+
+echo "Скачиваю $SRC_URL"
+if ! curl -fsSL -o "$TMPFILE" "$SRC_URL"; then
+    echo "Не удалось скачать install.sh" >&2; exit 1
+fi
+
 $SUDO mkdir -p "$TARGET_DIR"
-$SUDO install -m 0755 "$SRC" "$TARGET"
+$SUDO install -m 0755 "$TMPFILE" "$TARGET"
 
 echo "Установлено: $TARGET"
 
