@@ -180,7 +180,8 @@ check_sha256() {
 }
 
 list_versions() {
-    api_get "https://api.github.com/repos/${REPO}/releases?per_page=100" \
+    _json=$(api_get "https://api.github.com/repos/${REPO}/releases?per_page=100") || return 1
+    echo "$_json" \
         | grep '"tag_name":' \
         | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
@@ -323,7 +324,11 @@ extract_bin() {
 # --- режим: только список версий ---
 
 if [ "$LIST_ONLY" = "1" ]; then
-    list_versions
+    VERSIONS=$(list_versions) || exit 1
+    if [ -z "$VERSIONS" ]; then
+        echo "У репозитория ${REPO} нет релизов" >&2; exit 1
+    fi
+    echo "$VERSIONS"
     exit 0
 fi
 
