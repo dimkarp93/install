@@ -202,6 +202,27 @@ discover_bin() {
         | sed -E "s/-${OS}-${ARCH}\\.tar\\.gz\$//"
 }
 
+# Достаёт API-URL ассета (https://api.github.com/.../releases/assets/<id>)
+# по его имени из JSON релиза. Нужен для приватных репозиториев: ссылка
+# browser_download_url (github.com/.../releases/download/...) не принимает
+# токен и отдаёт 404, а API-эндпоинт с Accept: application/octet-stream — да.
+# Расчёт на то, что GitHub возвращает по одному полю на строку и поле "url"
+# ассета идёт перед его "name".
+asset_api_url() {
+    echo "$RELEASE_JSON" | awk -v target="$1" '
+        /"url":/  { url = $0 }
+        /"name":/ {
+            name = $0
+            sub(/.*"name": *"/, "", name); sub(/".*/, "", name)
+            if (name == target) {
+                sub(/.*"url": *"/, "", url); sub(/".*/, "", url)
+                print url
+                exit
+            }
+        }
+    '
+}
+
 do_install() {
     _bin_path="$1"
     _bin_ver="${2:-}"
@@ -389,8 +410,25 @@ if [ -z "$BIN" ]; then
 fi
 
 ARCHIVE="${BIN}-${OS}-${ARCH}.tar.gz"
-ARCHIVE_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
-SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
+
+# Для приватных репозиториев прямой browser_download_url не принимает токен —
+# качаем через API asset endpoint. Для публичных оставляем простую ссылку.
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+    if [ -z "$RELEASE_JSON" ]; then
+        RELEASE_JSON=$(get_release "$TAG") || exit 1
+    fi
+    ARCHIVE_URL=$(asset_api_url "$ARCHIVE")
+    SUMS_URL=$(asset_api_url "SHA256SUMS")
+    if [ -z "$ARCHIVE_URL" ]; then
+        echo "Ассет $ARCHIVE не найден в релизе ${TAG}" >&2; exit 1
+    fi
+    if [ -z "$SUMS_URL" ]; then
+        echo "Ассет SHA256SUMS не найден в релизе ${TAG}" >&2; exit 1
+    fi
+else
+    ARCHIVE_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
+    SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
+fi
 
 # --- режим: только скачать ---
 
