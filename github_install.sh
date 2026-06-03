@@ -12,11 +12,9 @@ usage() {
   -l, --list       вывести доступные версии и выйти
   -u, --update     установить, только если доступная версия новее текущей
   -D, --download   только скачать архив + SHA256SUMS и проверить сумму;
-                   вывести путь до архива; каталог задаётся через -d/INSTALL_DIR
-                   (по умолчанию: текущий каталог)
+                   вывести путь до архива; файлы сохраняются в текущий каталог
   -F, --from-file  установить из локального архива (проверив SHA256SUMS рядом);
                    игнорирует версию, -i, -u; имя-бинаря берётся из имени файла
-  -d, --dir DIR    каталог установки (переопределяет INSTALL_DIR)
   -h, --help       эта справка
 
   <владелец/репозиторий>  например: dimkarp93/envs
@@ -24,7 +22,6 @@ usage() {
   [версия]                semver вида 1.2.3 или v1.2.3 (по умолчанию: latest)
 
 Переменные среды:
-  INSTALL_DIR     каталог установки / каталог для скачивания (-d имеет приоритет)
   INSTALL_FORCE=1 перезаписать без подтверждения
   GITHUB_TOKEN    токен GitHub: снимает лимит 60 req/h и разрешает
                   установку из приватных репозиториев
@@ -53,12 +50,6 @@ while [ $# -gt 0 ]; do
             fi
             FROM_FILE="$2"; shift 2 ;;
         --from-file=*) FROM_FILE="${1#--from-file=}"; shift ;;
-        -d|--dir)
-            if [ $# -lt 2 ]; then
-                echo "Флаг --dir требует аргумент" >&2; exit 1
-            fi
-            INSTALL_DIR="$2"; shift 2 ;;
-        --dir=*) INSTALL_DIR="${1#--dir=}"; shift ;;
         -*) echo "Неизвестный флаг: $1" >&2; usage >&2; exit 1 ;;
         *)
             if [ -z "$REPO" ]; then
@@ -228,36 +219,32 @@ do_install() {
     _bin_path="$1"
     _bin_ver="${2:-}"
 
-    if [ -n "${INSTALL_DIR:-}" ]; then
-        TARGET_DIR="$INSTALL_DIR"
-    else
-        case "$OS" in
-            linux)
-                OPT1="/usr/bin"
-                OPT2="/usr/local/bin"
-                OPT3="$HOME/.local/bin"
-                ;;
-            darwin)
-                OPT1="/usr/local/bin"
-                OPT2="/opt/homebrew/bin"
-                OPT3="$HOME/.local/bin"
-                ;;
-        esac
-        echo "Куда установить $BIN?"
-        echo "  1) $OPT1"
-        echo "  2) $OPT2   (по умолчанию)"
-        echo "  3) $OPT3"
-        printf "Выберите [1-3]: "
-        CHOICE=""
-        read -r CHOICE </dev/tty || true
-        CHOICE=${CHOICE:-2}
-        case "$CHOICE" in
-            1) TARGET_DIR="$OPT1" ;;
-            2) TARGET_DIR="$OPT2" ;;
-            3) TARGET_DIR="$OPT3" ;;
-            *) echo "Некорректный выбор: $CHOICE" >&2; exit 1 ;;
-        esac
-    fi
+    case "$OS" in
+        linux)
+            OPT1="/usr/bin"
+            OPT2="/usr/local/bin"
+            OPT3="$HOME/.local/bin"
+            ;;
+        darwin)
+            OPT1="/usr/local/bin"
+            OPT2="/opt/homebrew/bin"
+            OPT3="$HOME/.local/bin"
+            ;;
+    esac
+    echo "Куда установить $BIN?"
+    echo "  1) $OPT1"
+    echo "  2) $OPT2   (по умолчанию)"
+    echo "  3) $OPT3"
+    printf "Выберите [1-3]: "
+    CHOICE=""
+    read -r CHOICE </dev/tty || true
+    CHOICE=${CHOICE:-2}
+    case "$CHOICE" in
+        1) TARGET_DIR="$OPT1" ;;
+        2) TARGET_DIR="$OPT2" ;;
+        3) TARGET_DIR="$OPT3" ;;
+        *) echo "Некорректный выбор: $CHOICE" >&2; exit 1 ;;
+    esac
 
     TARGET="$TARGET_DIR/$BIN"
 
@@ -438,7 +425,7 @@ fi
 # --- режим: только скачать ---
 
 if [ "$DOWNLOAD_ONLY" = "1" ]; then
-    DEST_DIR="${INSTALL_DIR:-$(pwd)}"
+    DEST_DIR="$(pwd)"
     mkdir -p "$DEST_DIR"
 
     echo "Скачиваю $ARCHIVE_URL"
