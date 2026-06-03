@@ -7,10 +7,10 @@
 Чтобы не вводить длинный `curl`-однострочник каждый раз, установите `github_install.sh` в PATH один раз:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/local.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/bootstrap.sh | sh
 ```
 
-Клонировать репозиторий не нужно. `local.sh` сам скачает актуальный `install.sh` с master и установит его как `github_install.sh` в выбранный каталог (`/usr/bin`, `/usr/local/bin` или `~/.local/bin`).
+Клонировать репозиторий не нужно. `bootstrap.sh` сам скачает актуальный `install.sh` с master и установит его как `github_install.sh` в выбранный каталог (`/usr/bin`, `/usr/local/bin` или `~/.local/bin`).
 
 После этого установка любой программы выглядит так:
 
