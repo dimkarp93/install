@@ -3,7 +3,7 @@ set -eu
 
 REPO="dimkarp93/install"
 BRANCH="master"
-SCRIPTS="github_install.sh local_install.sh"
+SCRIPTS="github_install.sh local_install.sh check_install.sh"
 BASE_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 
 usage() {
