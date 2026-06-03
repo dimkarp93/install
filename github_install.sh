@@ -6,7 +6,7 @@ usage() {
 Использование: $(basename "$0") [ФЛАГИ] <владелец/репозиторий> [имя-бинаря] [версия]
          или: $(basename "$0") -F <архив.tar.gz> [имя-бинаря]
 
-Скачивает и устанавливает go-программу из GitHub Releases.
+Скачивает и устанавливает программу из GitHub Releases.
 
   -i               выбрать версию интерактивно из списка
   -l, --list       вывести доступные версии и выйти
@@ -15,14 +15,14 @@ usage() {
                    вывести путь до архива; файлы сохраняются в текущий каталог
   -F, --from-file  установить из локального архива (проверив SHA256SUMS рядом);
                    игнорирует версию, -i, -u; имя-бинаря берётся из имени файла
+  --user-only      установить в ~/.local/bin (без sudo); по умолчанию — /usr/local/bin
   -h, --help       эта справка
 
-  <владелец/репозиторий>  например: dimkarp93/envs
+  <владелец/репозиторий>  например: owner/repo
   [имя-бинаря]            имя исполняемого файла (по умолчанию: имя репозитория)
   [версия]                semver вида 1.2.3 или v1.2.3 (по умолчанию: latest)
 
 Переменные среды:
-  INSTALL_FORCE=1 перезаписать без подтверждения
   GITHUB_TOKEN    токен GitHub: снимает лимит 60 req/h и разрешает
                   установку из приватных репозиториев
 EOF
@@ -32,6 +32,7 @@ INTERACTIVE=0
 LIST_ONLY=0
 UPDATE_ONLY=0
 DOWNLOAD_ONLY=0
+USER_ONLY=0
 FROM_FILE=""
 REPO=""
 BIN=""
@@ -44,6 +45,7 @@ while [ $# -gt 0 ]; do
         -l|--list) LIST_ONLY=1; shift ;;
         -u|--update) UPDATE_ONLY=1; shift ;;
         -D|--download) DOWNLOAD_ONLY=1; shift ;;
+        --user-only) USER_ONLY=1; shift ;;
         -F|--from-file)
             if [ $# -lt 2 ]; then
                 echo "Флаг --from-file требует аргумент" >&2; exit 1
@@ -219,55 +221,13 @@ do_install() {
     _bin_path="$1"
     _bin_ver="${2:-}"
 
-    case "$OS" in
-        linux)
-            OPT1="/usr/bin"
-            OPT2="/usr/local/bin"
-            OPT3="$HOME/.local/bin"
-            ;;
-        darwin)
-            OPT1="/usr/local/bin"
-            OPT2="/opt/homebrew/bin"
-            OPT3="$HOME/.local/bin"
-            ;;
-    esac
-    echo "Куда установить $BIN?"
-    echo "  1) $OPT1"
-    echo "  2) $OPT2   (по умолчанию)"
-    echo "  3) $OPT3"
-    printf "Выберите [1-3]: "
-    CHOICE=""
-    read -r CHOICE </dev/tty || true
-    CHOICE=${CHOICE:-2}
-    case "$CHOICE" in
-        1) TARGET_DIR="$OPT1" ;;
-        2) TARGET_DIR="$OPT2" ;;
-        3) TARGET_DIR="$OPT3" ;;
-        *) echo "Некорректный выбор: $CHOICE" >&2; exit 1 ;;
-    esac
+    if [ "$USER_ONLY" = "1" ]; then
+        TARGET_DIR="$HOME/.local/bin"
+    else
+        TARGET_DIR="/usr/local/bin"
+    fi
 
     TARGET="$TARGET_DIR/$BIN"
-
-    if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
-        if [ "${INSTALL_FORCE:-}" != "1" ]; then
-            CUR_VER=""
-            if [ -x "$TARGET" ]; then
-                CUR_VER=$("$TARGET" --version 2>/dev/null || true)
-            fi
-            if [ -n "$CUR_VER" ]; then
-                echo "Файл $TARGET уже существует (версия: $CUR_VER)."
-            else
-                echo "Файл $TARGET уже существует."
-            fi
-            printf "Перезаписать? [y/N]: "
-            ANSWER=""
-            read -r ANSWER </dev/tty || true
-            case "$ANSWER" in
-                y|Y|yes|YES) ;;
-                *) echo "Установка отменена."; exit 1 ;;
-            esac
-        fi
-    fi
 
     if [ -w "$TARGET_DIR" ] || { [ ! -e "$TARGET_DIR" ] && mkdir -p "$TARGET_DIR" 2>/dev/null; }; then
         SUDO=""

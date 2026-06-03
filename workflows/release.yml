@@ -27,7 +27,12 @@ jobs:
             echo "versions.txt должен содержать semver X.Y.Z (получено: '$v')" >&2
             exit 1
           fi
-          bin="${{ github.event.repository.name }}"
+          if [ -f bin.txt ]; then
+            bin=$(tr -d '[:space:]' < bin.txt)
+          fi
+          if [ -z "${bin:-}" ]; then
+            bin="${{ github.event.repository.name }}"
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v"    >> "$GITHUB_OUTPUT"
           echo "bin=$bin"   >> "$GITHUB_OUTPUT"
