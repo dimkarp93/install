@@ -3,32 +3,33 @@ set -eu
 
 usage() {
     cat <<EOF
-Использование: $(basename "$0") [ФЛАГИ] <путь>
+Использование: $(basename "$0") [ФЛАГИ] [путь]
 
-Собирает go-программу из локального git-репозитория и устанавливает бинарь.
+Собирает программу из локального git-репозитория и устанавливает бинарь.
 
-  -h, --help       эта справка
+  --user-only   установить в ~/.local/bin (без sudo); по умолчанию — /usr/local/bin
+  -h, --help    эта справка
 
-  <путь>  абсолютный путь к репозиторию или относительный — ищется по
-          корням из ~/.config/install/roots.txt (дефолт: ~/tools)
-
-Переменные среды:
-  INSTALL_FORCE=1 перезаписать без подтверждения
+  [путь]  абсолютный путь к репозиторию или относительный — ищется по
+          корням из ~/.config/install/roots.txt (дефолт: ~/tools).
+          Если путь не указан, используется текущий каталог.
 
 Требования к репозиторию:
   - содержит .git
   - содержит versions.txt с semver X.Y.Z
-  - содержит .github/workflows/*.yml с bin=<имя> или bin=\${{ github.event.repository.name }}
+  - имя бинаря берётся из bin.txt (если есть), иначе из имени каталога
   - есть таргет 'just build' (Justfile) или 'make build' (Makefile),
     который кладёт бинарь <имя> в корень репозитория
 EOF
 }
 
 PROGRAM_PATH=""
+USER_ONLY=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --user-only) USER_ONLY=1; shift ;;
         -*) echo "Неизвестный флаг: $1" >&2; usage >&2; exit 1 ;;
         *)
             if [ -z "$PROGRAM_PATH" ]; then
@@ -40,9 +41,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Путь не указан — берём текущий каталог
 if [ -z "$PROGRAM_PATH" ]; then
-    echo "Ошибка: укажите путь к репозиторию" >&2
-    usage >&2; exit 1
+    PROGRAM_PATH="$(pwd)"
 fi
 
 # --- вспомогательные функции ---
@@ -119,6 +120,9 @@ if [ ! -f "$REPO_DIR/versions.txt" ]; then
     echo "Ошибка: не найден $REPO_DIR/versions.txt" >&2; exit 1
 fi
 
+# нормализуем путь к каталогу (для корректного basename имени бинаря)
+REPO_DIR=$(cd "$REPO_DIR" && pwd)
+
 # --- версия из versions.txt ---
 
 VERSION=$(tr -d '[:space:]' < "$REPO_DIR/versions.txt")
@@ -126,75 +130,14 @@ if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     echo "Ошибка: versions.txt должен содержать semver X.Y.Z (получено: '$VERSION')" >&2; exit 1
 fi
 
-# --- имя бинаря из workflow ---
+# --- имя бинаря: из bin.txt, иначе из имени каталога ---
 
-find_workflow() {
-    _wf_dir="$REPO_DIR/.github/workflows"
-    if [ ! -d "$_wf_dir" ]; then
-        printf ''
-        return
-    fi
-    if [ -f "$_wf_dir/release.yml" ]; then
-        printf '%s' "$_wf_dir/release.yml"
-        return
-    fi
-    if [ -f "$_wf_dir/release.yaml" ]; then
-        printf '%s' "$_wf_dir/release.yaml"
-        return
-    fi
-    for _f in "$_wf_dir"/*.yml "$_wf_dir"/*.yaml; do
-        [ -f "$_f" ] || continue
-        if grep -q 'bin=' "$_f" 2>/dev/null; then
-            printf '%s' "$_f"
-            return
-        fi
-    done
-    printf ''
-}
-
-extract_bin_name() {
-    _wf="$1"
-    _line=$(grep 'bin=' "$_wf" | grep -v '^\s*#' | head -1 || true)
-    if [ -z "$_line" ]; then
-        printf ''
-        return
-    fi
-    # quoted:    bin="<value>"  — захватываем содержимое кавычек (может содержать пробелы)
-    # unquoted:  bin=<value>    — до пробела/комментария
-    if printf '%s' "$_line" | grep -Eq 'bin="[^"]+"'; then
-        _value=$(printf '%s' "$_line" | sed -E 's/.*bin="([^"]+)".*/\1/')
-    else
-        _value=$(printf '%s' "$_line" | sed -E 's/.*bin=([^ \t#]+).*/\1/')
-    fi
-    case "$_value" in
-        '${{ github.event.repository.name }}'*)
-            _remote=$(cd "$REPO_DIR" && git remote get-url origin 2>/dev/null || true)
-            if [ -z "$_remote" ]; then
-                printf ''
-                return
-            fi
-            printf '%s' "$(basename "$_remote" .git)"
-            ;;
-        *'${'*)
-            printf ''
-            ;;
-        '')
-            printf ''
-            ;;
-        *)
-            printf '%s' "$_value"
-            ;;
-    esac
-}
-
-WF=$(find_workflow)
 BIN=""
-if [ -n "$WF" ]; then
-    BIN=$(extract_bin_name "$WF")
+if [ -f "$REPO_DIR/bin.txt" ]; then
+    BIN=$(tr -d '[:space:]' < "$REPO_DIR/bin.txt")
 fi
 if [ -z "$BIN" ]; then
     BIN=$(basename "$REPO_DIR")
-    echo "Внимание: имя бинаря не найдено в workflow, используется имя папки: $BIN"
 fi
 
 echo "Репозиторий:  $REPO_DIR"
@@ -202,13 +145,6 @@ echo "Бинарь:       $BIN"
 echo "Версия:       $VERSION"
 
 # --- сборка ---
-
-OS=$(uname -s)
-case "$OS" in
-    Linux)  OS=linux ;;
-    Darwin) OS=darwin ;;
-    *) echo "Неподдерживаемая ОС: $OS" >&2; exit 1 ;;
-esac
 
 BUILDER=""
 BUILD_CMD=""
@@ -247,56 +183,13 @@ fi
 
 # --- установка ---
 
-case "$OS" in
-    linux)
-        OPT1="/usr/bin"
-        OPT2="/usr/local/bin"
-        OPT3="$HOME/.local/bin"
-        ;;
-    darwin)
-        OPT1="/usr/local/bin"
-        OPT2="/opt/homebrew/bin"
-        OPT3="$HOME/.local/bin"
-        ;;
-esac
-
-echo "Куда установить $BIN?"
-echo "  1) $OPT1"
-echo "  2) $OPT2   (по умолчанию)"
-echo "  3) $OPT3"
-printf "Выберите [1-3]: "
-CHOICE=""
-read -r CHOICE </dev/tty || true
-CHOICE=${CHOICE:-2}
-case "$CHOICE" in
-    1) TARGET_DIR="$OPT1" ;;
-    2) TARGET_DIR="$OPT2" ;;
-    3) TARGET_DIR="$OPT3" ;;
-    *) echo "Некорректный выбор: $CHOICE" >&2; exit 1 ;;
-esac
+if [ "$USER_ONLY" = "1" ]; then
+    TARGET_DIR="$HOME/.local/bin"
+else
+    TARGET_DIR="/usr/local/bin"
+fi
 
 TARGET="$TARGET_DIR/$BIN"
-
-if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
-    if [ "${INSTALL_FORCE:-}" != "1" ]; then
-        CUR_VER=""
-        if [ -x "$TARGET" ]; then
-            CUR_VER=$("$TARGET" --version 2>/dev/null || true)
-        fi
-        if [ -n "$CUR_VER" ]; then
-            echo "Файл $TARGET уже существует (версия: $CUR_VER)."
-        else
-            echo "Файл $TARGET уже существует."
-        fi
-        printf "Перезаписать? [y/N]: "
-        ANSWER=""
-        read -r ANSWER </dev/tty || true
-        case "$ANSWER" in
-            y|Y|yes|YES) ;;
-            *) echo "Установка отменена."; exit 1 ;;
-        esac
-    fi
-fi
 
 if [ -w "$TARGET_DIR" ] || { [ ! -e "$TARGET_DIR" ] && mkdir -p "$TARGET_DIR" 2>/dev/null; }; then
     SUDO=""

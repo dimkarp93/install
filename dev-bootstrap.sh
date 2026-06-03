@@ -1,16 +1,17 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO="dimkarp93/install"
-BRANCH="master"
+# dev-аналог bootstrap.sh: ставит установщики не из GitHub, а из текущей
+# рабочей копии этого репозитория (рядом с этим скриптом). Удобно при правке
+# самих установщиков — поправил → dev-bootstrap.sh → проверил в PATH.
+
 SCRIPTS="github_install.sh local_install.sh"
-BASE_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 
 usage() {
     cat <<EOF
 Использование: $(basename "$0") [ФЛАГИ]
 
-Скачивает установщики (${SCRIPTS}) и кладёт их в PATH.
+Копирует установщики (${SCRIPTS}) из текущей рабочей копии в PATH.
 
   --user-only   установить в ~/.local/bin (без sudo); по умолчанию — /usr/local/bin
   -h, --help    эта справка
@@ -26,9 +27,15 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if ! command -v curl >/dev/null 2>&1; then
-    echo "Требуется curl" >&2; exit 1
-fi
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+
+# проверяем, что исходники на месте
+for _name in $SCRIPTS; do
+    if [ ! -f "$SCRIPT_DIR/$_name" ]; then
+        echo "Не найден $SCRIPT_DIR/$_name — запускайте dev-bootstrap.sh из рабочей копии install" >&2
+        exit 1
+    fi
+done
 
 if [ "$USER_ONLY" = "1" ]; then
     TARGET_DIR="$HOME/.local/bin"
@@ -48,17 +55,9 @@ fi
 
 $SUDO mkdir -p "$TARGET_DIR"
 
-TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE"' EXIT
-
 for _name in $SCRIPTS; do
-    _url="${BASE_URL}/${_name}"
-    echo "Скачиваю $_url"
-    if ! curl -fsSL -o "$TMPFILE" "$_url"; then
-        echo "Не удалось скачать $_name" >&2; exit 1
-    fi
-    $SUDO install -m 0755 "$TMPFILE" "$TARGET_DIR/$_name"
-    echo "Установлено: $TARGET_DIR/$_name"
+    $SUDO install -m 0755 "$SCRIPT_DIR/$_name" "$TARGET_DIR/$_name"
+    echo "Установлено: $TARGET_DIR/$_name (из $SCRIPT_DIR/$_name)"
 done
 
 case ":${PATH:-}:" in
