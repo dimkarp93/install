@@ -4,7 +4,7 @@ set -eu
 REPO="dimkarp93/install"
 BRANCH="master"
 TARGET_NAME="github_install.sh"
-SRC_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}/install.sh"
+SRC_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}/github_install.sh"
 
 if ! command -v curl >/dev/null 2>&1; then
     echo "Требуется curl" >&2; exit 1
@@ -68,7 +68,7 @@ trap 'rm -f "$TMPFILE"' EXIT
 
 echo "Скачиваю $SRC_URL"
 if ! curl -fsSL -o "$TMPFILE" "$SRC_URL"; then
-    echo "Не удалось скачать install.sh" >&2; exit 1
+    echo "Не удалось скачать github_install.sh" >&2; exit 1
 fi
 
 $SUDO mkdir -p "$TARGET_DIR"

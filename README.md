@@ -10,7 +10,7 @@
 curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/bootstrap.sh | sh
 ```
 
-Клонировать репозиторий не нужно. `bootstrap.sh` сам скачает актуальный `install.sh` с master и установит его как `github_install.sh` в выбранный каталог (`/usr/bin`, `/usr/local/bin` или `~/.local/bin`).
+Клонировать репозиторий не нужно. `bootstrap.sh` сам скачает актуальный `github_install.sh` с master и установит его в выбранный каталог (`/usr/bin`, `/usr/local/bin` или `~/.local/bin`).
 
 После этого установка любой программы выглядит так:
 
@@ -23,14 +23,14 @@ github_install.sh owner/repo
 Если устанавливать `github_install.sh` не нужно, используйте one-liner напрямую:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/install.sh \
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/github_install.sh \
   | sh -s -- owner/repo
 ```
 
 Например, чтобы установить `envs`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/install.sh \
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/github_install.sh \
   | sh -s -- dimkarp93/envs
 ```
 
@@ -46,27 +46,13 @@ curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/install.sh
 ```sh
 github_install.sh dimkarp93/envs envs 0.3.0
 # или через curl:
-curl -fsSL .../install.sh | sh -s -- dimkarp93/envs envs 0.3.0
+curl -fsSL .../github_install.sh | sh -s -- dimkarp93/envs envs 0.3.0
 ```
 
 ### Интерактивный выбор версии
 
 ```sh
 github_install.sh -i dimkarp93/envs
-```
-
-### Установить в конкретный каталог
-
-Через флаг:
-
-```sh
-github_install.sh -d ~/.local/bin dimkarp93/envs
-```
-
-Через переменную среды:
-
-```sh
-INSTALL_DIR=~/.local/bin github_install.sh dimkarp93/envs
 ```
 
 ### Список доступных версий
@@ -83,15 +69,7 @@ github_install.sh --list dimkarp93/envs
 github_install.sh -D dimkarp93/envs
 ```
 
-По умолчанию файлы сохраняются в текущий каталог. Чтобы указать другой:
-
-```sh
-github_install.sh -D -d /tmp/downloads dimkarp93/envs
-# или
-INSTALL_DIR=/tmp/downloads github_install.sh -D dimkarp93/envs
-```
-
-Вывод на успех — только путь до архива (пригоден для скриптов):
+Файлы сохраняются в текущий каталог. Вывод на успех — только путь до архива (пригоден для скриптов):
 
 ```
 /tmp/downloads/envs-linux-amd64.tar.gz
@@ -108,7 +86,7 @@ github_install.sh -F /tmp/downloads/envs-linux-amd64.tar.gz
 Это прямая замена двухшаговой установке — скачать, затем установить:
 
 ```sh
-ARCHIVE=$(github_install.sh -D -d /tmp dimkarp93/envs)
+ARCHIVE=$(github_install.sh -D dimkarp93/envs)
 github_install.sh -F "$ARCHIVE"
 ```
 
@@ -131,6 +109,55 @@ GITHUB_TOKEN=ghp_... github_install.sh owner/private-repo
 ```sh
 GITHUB_TOKEN=ghp_... github_install.sh dimkarp93/envs
 ```
+
+## Локальная установка из исходников (`local_install.sh`)
+
+`local_install.sh` устанавливает программу прямо из рабочей копии git-репозитория — без
+публикации GitHub Release. Удобно на этапе разработки: правишь код → ставишь локально →
+проверяешь.
+
+### Конфигурация корней
+
+Скрипт ищет программы по списку каталогов-корней из `~/.config/install/roots.txt`:
+по одному каталогу на строку, `#`-комментарии и пустые строки игнорируются, `~` раскрывается
+в домашний каталог текущего пользователя. Если файла нет или он пуст — единственный корень
+по умолчанию `~/tools`.
+
+```
+# ~/.config/install/roots.txt
+~/tools
+~/dev
+```
+
+### Примеры использования
+
+Установить программу по имени (ищется в корнях):
+
+```sh
+local_install.sh envs
+```
+
+По абсолютному пути:
+
+```sh
+local_install.sh ~/dev/envs
+```
+
+Перезаписать без подтверждения:
+
+```sh
+INSTALL_FORCE=1 local_install.sh envs
+```
+
+### Требования к репозиторию
+
+Помимо стандартных требований из [CONVENTIONS.md](CONVENTIONS.md), для локальной установки нужно:
+
+- **Наличие build-таргета**: `just build` (Justfile) или `make build` (Makefile).
+- **Бинарь в корне**: таргет должен класть исполняемый файл `<имя>` прямо в корень репозитория.
+- **Workflow с именем бинаря** (опционально): `.github/workflows/release.yml` (или другой `.yml`-файл)
+  с присваиванием `bin=<имя>` или `bin=${{ github.event.repository.name }}`.
+  Если workflow отсутствует или имя не распознано — используется имя папки репозитория.
 
 ## Обновление
 
