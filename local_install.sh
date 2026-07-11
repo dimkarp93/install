@@ -17,7 +17,7 @@ usage() {
 Требования к репозиторию:
   - содержит .git
   - содержит versions.txt с semver X.Y.Z
-  - имя бинаря берётся из bin.txt (если есть), иначе из имени каталога
+  - имя бинаря совпадает с именем каталога
   - есть таргет 'just build' (Justfile) или 'make build' (Makefile),
     который кладёт бинарь <имя> в корень репозитория
 EOF
@@ -130,15 +130,9 @@ if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     echo "Ошибка: versions.txt должен содержать semver X.Y.Z (получено: '$VERSION')" >&2; exit 1
 fi
 
-# --- имя бинаря: из bin.txt, иначе из имени каталога ---
+# --- имя бинаря ---
 
-BIN=""
-if [ -f "$REPO_DIR/bin.txt" ]; then
-    BIN=$(tr -d '[:space:]' < "$REPO_DIR/bin.txt")
-fi
-if [ -z "$BIN" ]; then
-    BIN=$(basename "$REPO_DIR")
-fi
+BIN=$(basename "$REPO_DIR")
 
 echo "Репозиторий:  $REPO_DIR"
 echo "Бинарь:       $BIN"
