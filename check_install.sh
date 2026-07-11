@@ -139,27 +139,11 @@ else
     VERSION=""
 fi
 
-# --- имя бинаря (bin.txt или имя каталога) ---
+# --- имя бинаря (имя каталога) ---
 
 echo "Имя бинаря:"
-BIN=""
-if [ -f "$REPO_DIR/bin.txt" ]; then
-    _lines=$(grep -c '' "$REPO_DIR/bin.txt" 2>/dev/null || echo 0)
-    BIN=$(tr -d '[:space:]' < "$REPO_DIR/bin.txt")
-    if [ -z "$BIN" ]; then
-        fail "bin.txt пуст"
-    elif [ "$_lines" != "1" ]; then
-        warn "bin.txt должен содержать ровно одну строку (строк: $_lines); беру '$BIN'"
-    elif ! printf '%s' "$BIN" | grep -Eq '^[A-Za-z0-9._-]+$'; then
-        fail "недопустимое имя бинаря в bin.txt: '$BIN'"
-    else
-        ok "bin.txt = $BIN"
-    fi
-fi
-if [ -z "$BIN" ]; then
-    BIN=$(basename "$REPO_DIR")
-    ok "имя бинаря из имени каталога = $BIN"
-fi
+BIN=$(basename "$REPO_DIR")
+ok "имя бинаря из имени каталога = $BIN"
 
 # --- build-таргет ---
 
