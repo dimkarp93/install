@@ -256,16 +256,45 @@ github_install.sh -u owner/repo
 
 ## Использование шаблона CI-релиза
 
-Скопируйте `workflows/release.yml` в `.github/workflows/release.yml` вашего репозитория.
-Workflow автоматически:
+В каталоге `workflows/` лежат два равнозначных шаблона — выберите по платформе:
 
-- читает версию из `versions.txt`,
-- определяет имя исполняемого файла из имени репозитория,
-- собирает статические исполняемые файлы для четырёх платформ,
-- генерирует `SHA256SUMS`,
-- создаёт GitHub Release с тегом,
-- пропускает сборку, если тег уже существует (идемпотентно).
+| Платформа | Шаблон | Куда копировать |
+|---|---|---|
+| GitHub Actions | `workflows/release.yml` | `.github/workflows/release.yml` |
+| Gitea Actions | `workflows/release-gitea.yml` | `.gitea/workflows/release.yml` |
+
+Оба workflow делают одно и то же:
+
+- читают версию из `versions.txt`,
+- определяют имя исполняемого файла из имени репозитория,
+- собирают статические исполняемые файлы для четырёх платформ,
+- генерируют `SHA256SUMS`,
+- создают релиз с тегом `vX.Y.Z`,
+- пропускают сборку, если тег уже существует (идемпотентно).
+
+Имена архивов, `SHA256SUMS` и формат тега одинаковы на обеих платформах, поэтому релиз,
+собранный любым из шаблонов, устанавливается одним и тем же `github_install.sh`.
 
 Выпуск новой версии: повысить версию (`just bump-patch` / `bump-minor` / `bump-major` —
 см. [CONVENTIONS.md](CONVENTIONS.md)), зафиксировать `versions.txt` и влить в ветку
 `main` / `master`.
+
+### Особенности Gitea-шаблона
+
+`workflows/release-gitea.yml` не использует ни одного внешнего action: `actions/checkout` и
+`actions/setup-go` заменены на шаги `run:` (shell), а `gh release create` — на вызовы Gitea
+API через `curl`. Это нужно потому, что Gitea тянет actions с github.com, и в закрытом
+контуре они недоступны. Что это значит на практике:
+
+- **Checkout** — `git init` + shallow-fetch коммита `$GITHUB_SHA` из `$GITHUB_SERVER_URL`.
+- **Go** — версия читается из `go.mod` (директива `toolchain`, иначе `go`); если указана
+  только `X.Y`, точный патч резолвится через `https://go.dev/dl/?mode=json`. Тарбол ставится
+  в `$HOME/.local/go` (root не нужен). Раннеру требуется доступ к `go.dev`.
+- **Релиз** — `POST /api/v1/repos/{owner}/{repo}/releases`: Gitea сама создаёт тег из
+  `target_commitish`, отдельный `git push --tags` не нужен. Затем архивы и `SHA256SUMS`
+  загружаются как assets.
+- **Токен** — `secrets.GITHUB_TOKEN`, который Gitea выдаёт каждому job автоматически;
+  заводить секрет вручную не нужно. Если API отвечает `403`, включите запись для токена
+  Actions в настройках репозитория или подставьте свой токен с правом `write:repository`.
+- **`runs-on: ubuntu-latest`** — это метка (label) раннера. Если ваш `act_runner`
+  зарегистрирован с другими метками, поправьте `runs-on` под них.
