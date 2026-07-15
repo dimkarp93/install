@@ -1,6 +1,6 @@
 # install
 
-Универсальный установщик программ из GitHub Releases и шаблон CI-релиза.
+Универсальный установщик программ из GitHub и Gitea Releases и шаблон CI-релиза.
 
 Программа может быть написана на любом языке — установщикам важны лишь готовый исполняемый
 файл и соблюдение [конвенций](CONVENTIONS.md).
@@ -8,15 +8,15 @@
 ## Установка установщиков в PATH
 
 Чтобы не вводить длинную команду `curl` каждый раз, установите установщики
-(`github_install.sh` и `local_install.sh`) в PATH один раз:
+(`github_install.sh`, `gitea_install.sh`, `local_install.sh` и `check_install.sh`) в PATH один раз:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/bootstrap.sh | sh
 ```
 
-Клонировать репозиторий не нужно. `bootstrap.sh` сам скачает актуальные `github_install.sh`
-и `local_install.sh` с master и поместит их в `/usr/local/bin` (при необходимости — через
-`sudo`). Чтобы установить без `sudo` в `~/.local/bin`, добавьте `--user-only`:
+Клонировать репозиторий не нужно. `bootstrap.sh` сам скачает актуальные установщики с master и
+поместит их в `/usr/local/bin` (при необходимости — через `sudo`). Чтобы установить без `sudo`
+в `~/.local/bin`, добавьте `--user-only`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/bootstrap.sh | sh -s -- --user-only
@@ -30,9 +30,8 @@ github_install.sh owner/repo
 
 ### Установка из рабочей копии (`dev-bootstrap.sh`)
 
-Если вы правите сами установщики, `dev-bootstrap.sh` устанавливает `github_install.sh` и
-`local_install.sh` не из GitHub, а из текущей рабочей копии этого репозитория. Запускать
-из каталога с исходниками:
+Если вы правите сами установщики, `dev-bootstrap.sh` устанавливает их не из GitHub, а из текущей
+рабочей копии этого репозитория. Запускать из каталога с исходниками:
 
 ```sh
 ./dev-bootstrap.sh             # в /usr/local/bin
@@ -138,6 +137,89 @@ GITHUB_TOKEN=ghp_... github_install.sh owner/private-repo
 ```sh
 GITHUB_TOKEN=ghp_... github_install.sh owner/repo
 ```
+
+## Установка из Gitea (`gitea_install.sh`)
+
+`gitea_install.sh` устанавливает программу из релизов self-hosted Gitea — например из тех, что
+собирает шаблон `workflows/release-gitea.yml`. Скрипт делает ровно то же, что и
+`github_install.sh` (определяет ОС и архитектуру, скачивает архив и `SHA256SUMS`, проверяет
+контрольную сумму, распаковывает и устанавливает исполняемый файл), и понимает те же флаги.
+Требования к релизу — те же, что и для GitHub: архивы `<имя>-<os>-<arch>.tar.gz`, файл
+`SHA256SUMS`, теги `vX.Y.Z` (см. [CONVENTIONS.md](CONVENTIONS.md)).
+
+Отличие одно: обязателен адрес инстанса Gitea — флаг `-s` / `--server`.
+
+```sh
+gitea_install.sh -s https://git.example.com owner/repo
+```
+
+Схему можно не писать — подставится `https://`:
+
+```sh
+gitea_install.sh -s git.example.com owner/repo
+```
+
+Вместо флага адрес можно задать переменной среды `GITEA_URL`:
+
+```sh
+export GITEA_URL=https://git.example.com
+gitea_install.sh owner/repo
+```
+
+Через `curl` без установки скрипта:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/gitea_install.sh \
+  | sh -s -- -s https://git.example.com owner/repo
+```
+
+### Остальные флаги
+
+Работают так же, как у `github_install.sh` (см. разделы выше): `-i` — интерактивный выбор версии,
+`--list` — список версий, `-u` — обновить только при наличии новой версии, `-D` — только скачать
+архив с проверкой суммы, `-F` — установить из локального архива, `--user-only` — установка в
+`~/.local/bin`. Позиционные аргументы те же: `<владелец/репозиторий> [имя-бинаря] [версия]`.
+
+```sh
+gitea_install.sh -s https://git.example.com --list owner/repo
+gitea_install.sh -s https://git.example.com -i --user-only owner/repo
+gitea_install.sh -s https://git.example.com owner/repo myapp 0.3.0
+```
+
+Флагу `-F` адрес сервера не нужен — сеть не используется:
+
+```sh
+ARCHIVE=$(gitea_install.sh -s https://git.example.com -D owner/repo)
+gitea_install.sh -F "$ARCHIVE"
+```
+
+### Приватные репозитории
+
+Установка из приватного репозитория работает — нужен токен Gitea. Получить его:
+_Settings → Applications → Generate New Token_, права — `read:repository` (этого достаточно, `write`
+не нужен). Токен передаётся в переменной `GITEA_TOKEN`:
+
+```sh
+GITEA_TOKEN=... gitea_install.sh -s https://git.example.com owner/private-repo
+```
+
+Токен подставляется во все запросы: и в Gitea API (`/api/v1/repos/...` — список релизов, поиск
+ассетов), и в скачивание архива и `SHA256SUMS`. Работает со всеми флагами, включая `-D`, `-i` и
+`--list`:
+
+```sh
+export GITEA_URL=https://git.example.com
+export GITEA_TOKEN=...
+gitea_install.sh --list owner/private-repo
+gitea_install.sh -u owner/private-repo
+```
+
+Ссылки на архив и `SHA256SUMS` не собираются вручную, а берутся из ответа API
+(`browser_download_url` ассета) — поэтому установка не ломается, если инстанс раздаёт вложения с
+нестандартного пути или из внешнего хранилища.
+
+Без токена приватный репозиторий недоступен: Gitea ответит `401`/`404`, и скрипт подскажет задать
+`GITEA_TOKEN`. Публичным репозиториям токен не нужен.
 
 ## Локальная установка из исходников (`local_install.sh`)
 
@@ -256,16 +338,47 @@ github_install.sh -u owner/repo
 
 ## Использование шаблона CI-релиза
 
-Скопируйте `workflows/release.yml` в `.github/workflows/release.yml` вашего репозитория.
-Workflow автоматически:
+В каталоге `workflows/` лежат два равнозначных шаблона — выберите по платформе:
 
-- читает версию из `versions.txt`,
-- определяет имя исполняемого файла из имени репозитория,
-- собирает статические исполняемые файлы для четырёх платформ,
-- генерирует `SHA256SUMS`,
-- создаёт GitHub Release с тегом,
-- пропускает сборку, если тег уже существует (идемпотентно).
+| Платформа | Шаблон | Куда копировать |
+|---|---|---|
+| GitHub Actions | `workflows/release.yml` | `.github/workflows/release.yml` |
+| Gitea Actions | `workflows/release-gitea.yml` | `.gitea/workflows/release.yml` |
+
+Оба workflow делают одно и то же:
+
+- читают версию из `versions.txt`,
+- определяют имя исполняемого файла из имени репозитория,
+- собирают статические исполняемые файлы для четырёх платформ,
+- генерируют `SHA256SUMS`,
+- создают релиз с тегом `vX.Y.Z`,
+- пропускают сборку, если тег уже существует (идемпотентно).
+
+Имена архивов, `SHA256SUMS` и формат тега одинаковы на обеих платформах. Релиз из GitHub ставится
+`github_install.sh`, релиз из Gitea — `gitea_install.sh` (с флагом `-s`, см. раздел
+[Установка из Gitea](#установка-из-gitea-gitea_installsh)); отличаются они только адресами API и
+загрузки, набор флагов один и тот же.
 
 Выпуск новой версии: повысить версию (`just bump-patch` / `bump-minor` / `bump-major` —
 см. [CONVENTIONS.md](CONVENTIONS.md)), зафиксировать `versions.txt` и влить в ветку
 `main` / `master`.
+
+### Особенности Gitea-шаблона
+
+`workflows/release-gitea.yml` не использует ни одного внешнего action: `actions/checkout` и
+`actions/setup-go` заменены на шаги `run:` (shell), а `gh release create` — на вызовы Gitea
+API через `curl`. Это нужно потому, что Gitea тянет actions с github.com, и в закрытом
+контуре они недоступны. Что это значит на практике:
+
+- **Checkout** — `git init` + shallow-fetch коммита `$GITHUB_SHA` из `$GITHUB_SERVER_URL`.
+- **Go** — версия читается из `go.mod` (директива `toolchain`, иначе `go`); если указана
+  только `X.Y`, точный патч резолвится через `https://go.dev/dl/?mode=json`. Тарбол ставится
+  в `$HOME/.local/go` (root не нужен). Раннеру требуется доступ к `go.dev`.
+- **Релиз** — `POST /api/v1/repos/{owner}/{repo}/releases`: Gitea сама создаёт тег из
+  `target_commitish`, отдельный `git push --tags` не нужен. Затем архивы и `SHA256SUMS`
+  загружаются как assets.
+- **Токен** — `secrets.GITHUB_TOKEN`, который Gitea выдаёт каждому job автоматически;
+  заводить секрет вручную не нужно. Если API отвечает `403`, включите запись для токена
+  Actions в настройках репозитория или подставьте свой токен с правом `write:repository`.
+- **`runs-on: ubuntu-latest`** — это метка (label) раннера. Если ваш `act_runner`
+  зарегистрирован с другими метками, поправьте `runs-on` под них.

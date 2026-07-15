@@ -184,15 +184,16 @@ fi
 
 echo "Release-workflow:"
 _wf_found=0
-for _f in "$REPO_DIR"/.github/workflows/*.yml "$REPO_DIR"/.github/workflows/*.yaml; do
+for _f in "$REPO_DIR"/.github/workflows/*.yml "$REPO_DIR"/.github/workflows/*.yaml \
+          "$REPO_DIR"/.gitea/workflows/*.yml "$REPO_DIR"/.gitea/workflows/*.yaml; do
     [ -f "$_f" ] || continue
     _wf_found=1
     break
 done
 if [ "$_wf_found" = "1" ]; then
-    ok "найден .github/workflows/*.yml"
+    ok "найден .github/workflows/*.yml или .gitea/workflows/*.yml"
 else
-    warn "нет .github/workflows/*.yml (релиз не будет публиковаться автоматически)"
+    warn "нет .github/workflows/*.yml и .gitea/workflows/*.yml (релиз не будет публиковаться автоматически)"
 fi
 
 # --- git-теги (рекомендация) ---
