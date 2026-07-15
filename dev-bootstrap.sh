@@ -5,7 +5,7 @@ set -eu
 # рабочей копии этого репозитория (рядом с этим скриптом). Удобно при правке
 # самих установщиков — поправил → dev-bootstrap.sh → проверил в PATH.
 
-SCRIPTS="github_install.sh local_install.sh check_install.sh"
+SCRIPTS="github_install.sh gitea_install.sh local_install.sh check_install.sh"
 
 usage() {
     cat <<EOF
