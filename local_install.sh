@@ -3,23 +3,23 @@ set -eu
 
 usage() {
     cat <<EOF
-Использование: $(basename "$0") [ФЛАГИ] [путь]
+Usage: $(basename "$0") [FLAGS] [path]
 
-Собирает программу из локального git-репозитория и устанавливает бинарь.
+Builds a program from a local git repository and installs the binary.
 
-  --user-only   установить в ~/.local/bin (без sudo); по умолчанию — /usr/local/bin
-  -h, --help    эта справка
+  --user-only   install into ~/.local/bin (no sudo); default is /usr/local/bin
+  -h, --help    show this help
 
-  [путь]  абсолютный путь к репозиторию или относительный — ищется по
-          корням из ~/.config/install/roots.txt (дефолт: ~/tools).
-          Если путь не указан, используется текущий каталог.
+  [path]  absolute path to the repository, or a relative one - looked up in
+          the roots from ~/.config/install/roots.txt (default: ~/tools).
+          If no path is given, the current directory is used.
 
-Требования к репозиторию:
-  - содержит .git
-  - содержит versions.txt с semver X.Y.Z
-  - имя бинаря совпадает с именем каталога
-  - есть таргет 'just build' (Justfile) или 'make build' (Makefile),
-    который кладёт бинарь <имя> в корень репозитория
+Repository requirements:
+  - contains .git
+  - contains versions.txt with semver X.Y.Z
+  - the binary name matches the directory name
+  - has a 'just build' (Justfile) or 'make build' (Makefile) target
+    that puts the binary <name> into the repository root
 EOF
 }
 
@@ -30,23 +30,23 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --user-only) USER_ONLY=1; shift ;;
-        -*) echo "Неизвестный флаг: $1" >&2; usage >&2; exit 1 ;;
+        -*) echo "Unknown flag: $1" >&2; usage >&2; exit 1 ;;
         *)
             if [ -z "$PROGRAM_PATH" ]; then
                 PROGRAM_PATH="$1"
             else
-                echo "Ошибка: указан лишний аргумент: $1" >&2; usage >&2; exit 1
+                echo "Error: unexpected extra argument: $1" >&2; usage >&2; exit 1
             fi
             shift ;;
     esac
 done
 
-# Путь не указан — берём текущий каталог
+# no path given - use the current directory
 if [ -z "$PROGRAM_PATH" ]; then
     PROGRAM_PATH="$(pwd)"
 fi
 
-# --- вспомогательные функции ---
+# --- helpers ---
 
 expand_tilde() {
     case "$1" in
@@ -56,7 +56,7 @@ expand_tilde() {
     esac
 }
 
-# Записывает список корней (по одному на строку) в файл $1
+# Writes the list of roots (one per line) into file $1
 write_roots() {
     _out="$1"
     _roots_file="$HOME/.config/install/roots.txt"
@@ -76,7 +76,7 @@ write_roots() {
     fi
 }
 
-# --- резолв пути ---
+# --- path resolution ---
 
 case "$PROGRAM_PATH" in
     /*)
@@ -94,7 +94,7 @@ case "$PROGRAM_PATH" in
             fi
         done < "$_roots_tmp"
         if [ -z "$REPO_DIR" ]; then
-            echo "Репозиторий '$PROGRAM_PATH' не найден. Просмотренные корни:" >&2
+            echo "Repository '$PROGRAM_PATH' not found. Roots searched:" >&2
             while IFS= read -r _root; do
                 [ -z "$_root" ] && continue
                 echo "  $_root" >&2
@@ -106,39 +106,39 @@ case "$PROGRAM_PATH" in
         ;;
 esac
 
-# --- валидация ---
+# --- validation ---
 
 if [ ! -d "$REPO_DIR" ]; then
-    echo "Ошибка: путь не является каталогом: $REPO_DIR" >&2; exit 1
+    echo "Error: path is not a directory: $REPO_DIR" >&2; exit 1
 fi
 
 if [ ! -d "$REPO_DIR/.git" ]; then
-    echo "Ошибка: $REPO_DIR не является git-репозиторием (нет .git)" >&2; exit 1
+    echo "Error: $REPO_DIR is not a git repository (no .git)" >&2; exit 1
 fi
 
 if [ ! -f "$REPO_DIR/versions.txt" ]; then
-    echo "Ошибка: не найден $REPO_DIR/versions.txt" >&2; exit 1
+    echo "Error: $REPO_DIR/versions.txt not found" >&2; exit 1
 fi
 
-# нормализуем путь к каталогу (для корректного basename имени бинаря)
+# normalize the directory path (so basename gives the correct binary name)
 REPO_DIR=$(cd "$REPO_DIR" && pwd)
 
-# --- версия из versions.txt ---
+# --- version from versions.txt ---
 
 VERSION=$(tr -d '[:space:]' < "$REPO_DIR/versions.txt")
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    echo "Ошибка: versions.txt должен содержать semver X.Y.Z (получено: '$VERSION')" >&2; exit 1
+    echo "Error: versions.txt must contain semver X.Y.Z (got: '$VERSION')" >&2; exit 1
 fi
 
-# --- имя бинаря ---
+# --- binary name ---
 
 BIN=$(basename "$REPO_DIR")
 
-echo "Репозиторий:  $REPO_DIR"
-echo "Бинарь:       $BIN"
-echo "Версия:       $VERSION"
+echo "Repository:  $REPO_DIR"
+echo "Binary:      $BIN"
+echo "Version:     $VERSION"
 
-# --- сборка ---
+# --- build ---
 
 BUILDER=""
 BUILD_CMD=""
@@ -158,24 +158,24 @@ if [ -z "$BUILDER" ]; then
 fi
 
 if [ -z "$BUILDER" ]; then
-    echo "Ошибка: не найден ни Justfile, ни Makefile в $REPO_DIR" >&2
-    echo "Репозиторий должен содержать таргет 'just build' или 'make build'" >&2
+    echo "Error: neither Justfile nor Makefile found in $REPO_DIR" >&2
+    echo "The repository must provide a 'just build' or 'make build' target" >&2
     exit 1
 fi
 
-echo "Собираю: $BUILD_CMD (в $REPO_DIR)"
+echo "Building: $BUILD_CMD (in $REPO_DIR)"
 (cd "$REPO_DIR" && $BUILD_CMD)
 
-# --- проверка собранного бинаря ---
+# --- check the built binary ---
 
 BIN_PATH="$REPO_DIR/$BIN"
 if [ ! -x "$BIN_PATH" ]; then
-    echo "Ошибка: бинарь '$BIN' не найден в корне репозитория после сборки: $BIN_PATH" >&2
-    echo "Таргет build должен класть исполняемый файл '$BIN' в корень репозитория" >&2
+    echo "Error: binary '$BIN' not found in the repository root after the build: $BIN_PATH" >&2
+    echo "The build target must put the executable '$BIN' into the repository root" >&2
     exit 1
 fi
 
-# --- установка ---
+# --- install ---
 
 if [ "$USER_ONLY" = "1" ]; then
     TARGET_DIR="$HOME/.local/bin"
@@ -191,21 +191,21 @@ else
     if command -v sudo >/dev/null 2>&1; then
         SUDO="sudo"
     else
-        echo "Каталог $TARGET_DIR недоступен на запись и sudo не найден." >&2; exit 1
+        echo "Directory $TARGET_DIR is not writable and sudo was not found." >&2; exit 1
     fi
 fi
 
 $SUDO mkdir -p "$TARGET_DIR"
 $SUDO install -m 0755 "$BIN_PATH" "$TARGET"
 
-echo "Установлено: $TARGET (версия $VERSION)"
+echo "Installed: $TARGET (version $VERSION)"
 
 case ":${PATH:-}:" in
     *":$TARGET_DIR:"*) ;;
     *)
         echo
-        echo "Внимание: $TARGET_DIR отсутствует в PATH."
-        echo "Добавьте в ~/.profile или ~/.bashrc / ~/.zshrc строку:"
+        echo "Warning: $TARGET_DIR is not in PATH."
+        echo "Add this line to ~/.profile or ~/.bashrc / ~/.zshrc:"
         echo "    export PATH=\"$TARGET_DIR:\$PATH\""
         ;;
 esac

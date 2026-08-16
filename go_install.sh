@@ -3,29 +3,29 @@ set -eu
 
 usage() {
     cat <<EOF
-Использование: $(basename "$0") [ФЛАГИ] <module-path> [версия]
+Usage: $(basename "$0") [FLAGS] <module-path> [version]
 
-Устанавливает Go-программу через 'go install' и кладёт бинарь в PATH.
+Installs a Go program via 'go install' and puts the binary into PATH.
 
-  -l, --list       вывести доступные версии модуля и выйти
-  -p, --pkg ПУТЬ   путь пакета внутри модуля (по умолчанию определяется
-                   автоматически: <module>/cmd/<имя>, затем <module>)
-  --gobin          оставить бинарь в GOBIN (~/go/bin), не копировать в PATH
-  --user-only      установить в ~/.local/bin (без sudo); по умолчанию — /usr/local/bin
-  -h, --help       эта справка
+  -l, --list       print the available module versions and exit
+  -p, --pkg PATH   package path inside the module (detected automatically
+                   by default: <module>/cmd/<name>, then <module>)
+  --gobin          keep the binary in GOBIN (~/go/bin), do not copy it into PATH
+  --user-only      install into ~/.local/bin (no sudo); default is /usr/local/bin
+  -h, --help       show this help
 
-  <module-path>  путь модуля, например: github.com/dimkarp93/md-pdf
-  [версия]       semver вида 1.2.3 или v1.2.3 (по умолчанию: latest)
+  <module-path>  module path, e.g.: github.com/dimkarp93/md-pdf
+  [version]      semver like 1.2.3 or v1.2.3 (default: latest)
 
-Требует установленного Go. Модуль должен соответствовать Go-конвенциям из
-CONVENTIONS.md: сетевой module path, зависимости опубликованы, без replace в go.mod.
-Если Go нет или программа написана не на Go — используйте github_install.sh или
+Requires an installed Go toolchain. The module must follow the Go conventions from
+CONVENTIONS.md: network module path, published dependencies, no replace in go.mod.
+If Go is missing or the program is not written in Go, use github_install.sh or
 gitea_install.sh.
 
-Флаги -D, -F, -i, -u не поддерживаются: у 'go install' нет промежуточного архива.
-Для этих сценариев используйте github_install.sh / gitea_install.sh.
+Flags -D, -F, -i, -u are not supported: 'go install' has no intermediate archive.
+Use github_install.sh / gitea_install.sh for those scenarios.
 
-  GOPRIVATE  для приватных репозиториев, например: GOPRIVATE=github.com/dimkarp93/*
+  GOPRIVATE  for private repositories, e.g.: GOPRIVATE=github.com/dimkarp93/*
 EOF
 }
 
@@ -44,64 +44,64 @@ while [ $# -gt 0 ]; do
         --user-only) USER_ONLY=1; shift ;;
         -p|--pkg)
             if [ $# -lt 2 ]; then
-                echo "Флаг --pkg требует аргумент" >&2; exit 1
+                echo "Flag --pkg requires an argument" >&2; exit 1
             fi
             PKG="$2"; shift 2 ;;
         --pkg=*) PKG="${1#--pkg=}"; shift ;;
-        -*) echo "Неизвестный флаг: $1" >&2; usage >&2; exit 1 ;;
+        -*) echo "Unknown flag: $1" >&2; usage >&2; exit 1 ;;
         *)
             if [ -z "$MODULE" ]; then
                 MODULE="$1"
             elif [ -z "$VERSION_ARG" ]; then
                 VERSION_ARG="$1"
             else
-                echo "Ошибка: указан лишний аргумент: $1" >&2; usage >&2; exit 1
+                echo "Error: unexpected extra argument: $1" >&2; usage >&2; exit 1
             fi
             shift ;;
     esac
 done
 
 if [ -z "$MODULE" ]; then
-    echo "Ошибка: не указан module-path" >&2; usage >&2; exit 1
+    echo "Error: module-path is not specified" >&2; usage >&2; exit 1
 fi
 
 MODULE=${MODULE%/}
 
 if ! command -v go >/dev/null 2>&1; then
-    echo "Ошибка: не найден 'go' в PATH — go_install.sh требует установленного Go." >&2
-    echo "Установите Go (https://go.dev/dl/) или воспользуйтесь github_install.sh /" >&2
-    echo "gitea_install.sh — они ставят готовый бинарь и Go не требуют." >&2
+    echo "Error: 'go' not found in PATH - go_install.sh requires an installed Go toolchain." >&2
+    echo "Install Go (https://go.dev/dl/) or use github_install.sh /" >&2
+    echo "gitea_install.sh - they install a prebuilt binary and do not require Go." >&2
     exit 1
 fi
 
 case "$MODULE" in
     */*) ;;
     *)
-        echo "Ошибка: '$MODULE' не похож на module-path." >&2
-        echo "Ожидается сетевой путь вида github.com/owner/repo (см. CONVENTIONS.md)." >&2
+        echo "Error: '$MODULE' does not look like a module-path." >&2
+        echo "A network path like github.com/owner/repo is expected (see CONVENTIONS.md)." >&2
         exit 1 ;;
 esac
 
 private_hint() {
     if [ -z "${GOPRIVATE:-}" ]; then
-        echo "Если репозиторий приватный — задайте GOPRIVATE, например:" >&2
+        echo "If the repository is private, set GOPRIVATE, e.g.:" >&2
         echo "    GOPRIVATE=$(printf '%s' "$MODULE" | cut -d/ -f1-2)/* $(basename "$0") $MODULE" >&2
-        echo "и настройте доступ git к репозиторию (SSH-ключ или ~/.netrc)." >&2
+        echo "and configure git access to the repository (SSH key or ~/.netrc)." >&2
     else
-        echo "GOPRIVATE=$GOPRIVATE задан — проверьте доступ git к репозиторию" >&2
-        echo "(SSH-ключ, ~/.netrc или git config url.<...>.insteadOf)." >&2
+        echo "GOPRIVATE=$GOPRIVATE is set - check git access to the repository" >&2
+        echo "(SSH key, ~/.netrc or git config url.<...>.insteadOf)." >&2
     fi
 }
 
 if [ "$LIST_ONLY" = "1" ]; then
     _versions=$(go list -m -versions "$MODULE" 2>/dev/null) || {
-        echo "Не удалось получить список версий модуля $MODULE" >&2
+        echo "Failed to fetch the version list for module $MODULE" >&2
         private_hint
         exit 1
     }
     _versions=$(printf '%s' "$_versions" | cut -s -d' ' -f2-)
     if [ -z "$_versions" ]; then
-        echo "У модуля $MODULE нет опубликованных версий (нет semver-тегов)" >&2
+        echo "Module $MODULE has no published versions (no semver tags)" >&2
         exit 1
     fi
     printf '%s' "$_versions" | tr ' ' '\n'
@@ -113,7 +113,7 @@ if [ -z "$VERSION_ARG" ] || [ "$VERSION_ARG" = "latest" ]; then
 else
     VERSION="${VERSION_ARG#v}"
     if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-        echo "Ошибка: версия должна быть semver X.Y.Z или vX.Y.Z (получено: '$VERSION_ARG')" >&2
+        echo "Error: version must be semver X.Y.Z or vX.Y.Z (got: '$VERSION_ARG')" >&2
         exit 1
     fi
     VERSION="v$VERSION"
@@ -134,15 +134,15 @@ fi
 GOBIN_TMP=$(mktemp -d)
 trap 'rm -rf "$GOBIN_TMP"' EXIT
 
-echo "Модуль:       $MODULE"
-echo "Версия:       $VERSION"
+echo "Module:       $MODULE"
+echo "Version:      $VERSION"
 
 INSTALL_LOG=$(mktemp)
 trap 'rm -rf "$GOBIN_TMP"; rm -f "$INSTALL_LOG"' EXIT
 
 INSTALLED_PKG=""
 for _pkg in $CANDIDATES; do
-    echo "Пробую:       go install $_pkg@$VERSION"
+    echo "Trying:       go install $_pkg@$VERSION"
     if GOBIN="$GOBIN_TMP" go install -trimpath "$_pkg@$VERSION" >"$INSTALL_LOG" 2>&1; then
         INSTALLED_PKG="$_pkg"
         break
@@ -150,7 +150,7 @@ for _pkg in $CANDIDATES; do
 done
 
 if [ -z "$INSTALLED_PKG" ]; then
-    echo "Ошибка: не удалось установить $MODULE@$VERSION" >&2
+    echo "Error: failed to install $MODULE@$VERSION" >&2
     cat "$INSTALL_LOG" >&2
     if grep -qiE '404|not found|unrecognized import|terminal prompts disabled|authentication' "$INSTALL_LOG"; then
         private_hint
@@ -160,7 +160,7 @@ fi
 
 BUILT=$(find "$GOBIN_TMP" -maxdepth 1 -type f | head -1)
 if [ -z "$BUILT" ]; then
-    echo "Ошибка: go install отработал, но бинарь не найден в $GOBIN_TMP" >&2
+    echo "Error: go install succeeded but no binary was found in $GOBIN_TMP" >&2
     exit 1
 fi
 
@@ -170,8 +170,8 @@ ACTUAL_VERSION=$(go version -m "$BUILT" 2>/dev/null \
     | awk '$1 == "mod" { print $3; exit }')
 [ -n "$ACTUAL_VERSION" ] || ACTUAL_VERSION="$VERSION"
 
-echo "Пакет:        $INSTALLED_PKG"
-echo "Бинарь:       $BIN"
+echo "Package:      $INSTALLED_PKG"
+echo "Binary:       $BIN"
 
 if [ "$KEEP_GOBIN" = "1" ]; then
     TARGET_DIR=$(go env GOBIN)
@@ -180,7 +180,7 @@ if [ "$KEEP_GOBIN" = "1" ]; then
     fi
     mkdir -p "$TARGET_DIR"
     install -m 0755 "$BUILT" "$TARGET_DIR/$BIN"
-    echo "Установлено: $TARGET_DIR/$BIN (версия $ACTUAL_VERSION)"
+    echo "Installed: $TARGET_DIR/$BIN (version $ACTUAL_VERSION)"
 else
     if [ "$USER_ONLY" = "1" ]; then
         TARGET_DIR="$HOME/.local/bin"
@@ -194,21 +194,21 @@ else
         if command -v sudo >/dev/null 2>&1; then
             SUDO="sudo"
         else
-            echo "Каталог $TARGET_DIR недоступен на запись и sudo не найден." >&2; exit 1
+            echo "Directory $TARGET_DIR is not writable and sudo was not found." >&2; exit 1
         fi
     fi
 
     $SUDO mkdir -p "$TARGET_DIR"
     $SUDO install -m 0755 "$BUILT" "$TARGET_DIR/$BIN"
-    echo "Установлено: $TARGET_DIR/$BIN (версия $ACTUAL_VERSION)"
+    echo "Installed: $TARGET_DIR/$BIN (version $ACTUAL_VERSION)"
 fi
 
 case ":${PATH:-}:" in
     *":$TARGET_DIR:"*) ;;
     *)
         echo
-        echo "Внимание: $TARGET_DIR отсутствует в PATH."
-        echo "Добавьте в ~/.profile или ~/.bashrc / ~/.zshrc строку:"
+        echo "Warning: $TARGET_DIR is not in PATH."
+        echo "Add this line to ~/.profile or ~/.bashrc / ~/.zshrc:"
         echo "    export PATH=\"$TARGET_DIR:\$PATH\""
         ;;
 esac

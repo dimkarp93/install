@@ -3,32 +3,32 @@ set -eu
 
 usage() {
     cat <<EOF
-Использование: $(basename "$0") -s <хост-gitea> [ФЛАГИ] <владелец/репозиторий> [имя-бинаря] [версия]
-         или: $(basename "$0") -F <архив.tar.gz> [имя-бинаря]
+Usage: $(basename "$0") -s <gitea-host> [FLAGS] <owner/repository> [binary-name] [version]
+   or: $(basename "$0") -F <archive.tar.gz> [binary-name]
 
-Скачивает и устанавливает программу из Gitea Releases.
+Downloads and installs a program from Gitea Releases.
 
-  -s, --server     адрес инстанса Gitea, например https://git.example.com
-                   (можно без схемы: git.example.com — подставится https://);
-                   если не указан, берётся из переменной среды GITEA_URL
-  -i               выбрать версию интерактивно из списка
-  -l, --list       вывести доступные версии и выйти
-  -u, --update     установить, только если доступная версия новее текущей
-  -D, --download   только скачать архив + SHA256SUMS и проверить сумму;
-                   вывести путь до архива; файлы сохраняются в текущий каталог
-  -F, --from-file  установить из локального архива (проверив SHA256SUMS рядом);
-                   игнорирует версию, -i, -u, -s; имя-бинаря берётся из имени файла
-  --user-only      установить в ~/.local/bin (без sudo); по умолчанию — /usr/local/bin
-  -h, --help       эта справка
+  -s, --server     Gitea instance address, e.g. https://git.example.com
+                   (the scheme may be omitted: git.example.com becomes https://);
+                   if not given, taken from the GITEA_URL environment variable
+  -i               pick the version interactively from a list
+  -l, --list       print the available versions and exit
+  -u, --update     install only if the available version is newer than the current one
+  -D, --download   only download the archive + SHA256SUMS and verify the checksum;
+                   print the archive path; files are saved into the current directory
+  -F, --from-file  install from a local archive (verifying the SHA256SUMS next to it);
+                   ignores version, -i, -u, -s; the binary name is taken from the file name
+  --user-only      install into ~/.local/bin (no sudo); default is /usr/local/bin
+  -h, --help       show this help
 
-  <владелец/репозиторий>  например: owner/repo
-  [имя-бинаря]            имя исполняемого файла (по умолчанию: имя репозитория)
-  [версия]                semver вида 1.2.3 или v1.2.3 (по умолчанию: latest)
+  <owner/repository>  e.g.: owner/repo
+  [binary-name]       name of the executable (default: repository name)
+  [version]           semver like 1.2.3 or v1.2.3 (default: latest)
 
-Переменные среды:
-  GITEA_URL       адрес инстанса Gitea (альтернатива флагу -s)
-  GITEA_TOKEN     токен Gitea с правом read:repository: нужен для установки
-                  из приватных репозиториев
+Environment variables:
+  GITEA_URL       Gitea instance address (alternative to the -s flag)
+  GITEA_TOKEN     Gitea token with the read:repository scope: required to install
+                  from private repositories
 EOF
 }
 
@@ -53,17 +53,17 @@ while [ $# -gt 0 ]; do
         --user-only) USER_ONLY=1; shift ;;
         -s|--server)
             if [ $# -lt 2 ]; then
-                echo "Флаг --server требует аргумент" >&2; exit 1
+                echo "Flag --server requires an argument" >&2; exit 1
             fi
             SERVER="$2"; shift 2 ;;
         --server=*) SERVER="${1#--server=}"; shift ;;
         -F|--from-file)
             if [ $# -lt 2 ]; then
-                echo "Флаг --from-file требует аргумент" >&2; exit 1
+                echo "Flag --from-file requires an argument" >&2; exit 1
             fi
             FROM_FILE="$2"; shift 2 ;;
         --from-file=*) FROM_FILE="${1#--from-file=}"; shift ;;
-        -*) echo "Неизвестный флаг: $1" >&2; usage >&2; exit 1 ;;
+        -*) echo "Unknown flag: $1" >&2; usage >&2; exit 1 ;;
         *)
             if [ -z "$REPO" ]; then
                 REPO="$1"
@@ -77,24 +77,24 @@ while [ $# -gt 0 ]; do
 done
 
 if ! command -v curl >/dev/null 2>&1; then
-    echo "Требуется curl" >&2; exit 1
+    echo "curl is required" >&2; exit 1
 fi
 
 case "$(uname -s)" in
     Linux)  OS=linux ;;
     Darwin) OS=darwin ;;
-    *) echo "Неподдерживаемая ОС: $(uname -s)" >&2; exit 1 ;;
+    *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
 
 case "$(uname -m)" in
     x86_64|amd64)   ARCH=amd64 ;;
     aarch64|arm64)  ARCH=arm64 ;;
-    *) echo "Неподдерживаемая архитектура: $(uname -m)" >&2; exit 1 ;;
+    *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
 if [ -n "$FROM_FILE" ]; then
     if [ ! -f "$FROM_FILE" ]; then
-        echo "Файл не найден: $FROM_FILE" >&2; exit 1
+        echo "File not found: $FROM_FILE" >&2; exit 1
     fi
     if [ -n "$REPO" ] && [ -z "$BIN" ]; then
         case "$REPO" in
@@ -106,15 +106,15 @@ if [ -n "$FROM_FILE" ]; then
         _base=$(basename "$FROM_FILE" .tar.gz)
         BIN="${_base%-${OS}-${ARCH}}"
         if [ -z "$BIN" ] || [ "$BIN" = "$(basename "$FROM_FILE" .tar.gz)" ]; then
-            echo "Не удалось определить имя бинаря из имени файла: $(basename "$FROM_FILE")" >&2
-            echo "Укажите имя явно: $(basename "$0") -F $FROM_FILE <имя-бинаря>" >&2
+            echo "Failed to determine the binary name from the file name: $(basename "$FROM_FILE")" >&2
+            echo "Specify the name explicitly: $(basename "$0") -F $FROM_FILE <binary-name>" >&2
             exit 1
         fi
     fi
 else
     if [ -z "$SERVER" ]; then
-        echo "Ошибка: укажите хост Gitea флагом -s или переменной среды GITEA_URL" >&2
-        echo "Например: $(basename "$0") -s https://git.example.com owner/repo" >&2
+        echo "Error: specify the Gitea host with the -s flag or the GITEA_URL environment variable" >&2
+        echo "For example: $(basename "$0") -s https://git.example.com owner/repo" >&2
         usage >&2; exit 1
     fi
     case "$SERVER" in
@@ -129,12 +129,12 @@ else
     done
 
     if [ -z "$REPO" ]; then
-        echo "Ошибка: укажите владелец/репозиторий" >&2
+        echo "Error: specify owner/repository" >&2
         usage >&2; exit 1
     fi
     case "$REPO" in
         */*)  ;;
-        *) echo "Ошибка: формат должен быть владелец/репозиторий (например, dimkarp93/envs)" >&2; exit 1 ;;
+        *) echo "Error: the format must be owner/repository (e.g. dimkarp93/envs)" >&2; exit 1 ;;
     esac
 fi
 
@@ -151,12 +151,12 @@ api_get() {
     if [ "$_http" != "200" ]; then
         rm -f "$_out"
         if [ "$_quiet" != "1" ]; then
-            echo "Gitea API вернул HTTP $_http для $_url" >&2
+            echo "Gitea API returned HTTP $_http for $_url" >&2
             if [ "$_http" = "401" ] || [ "$_http" = "403" ] || [ "$_http" = "404" ]; then
                 if [ -z "${GITEA_TOKEN:-}" ]; then
-                    echo "Если репозиторий приватный — задайте GITEA_TOKEN (право read:repository)" >&2
+                    echo "If the repository is private, set GITEA_TOKEN (read:repository scope)" >&2
                 else
-                    echo "Проверьте, что GITEA_TOKEN действителен и имеет право read:repository" >&2
+                    echo "Check that GITEA_TOKEN is valid and has the read:repository scope" >&2
                 fi
             fi
         fi
@@ -172,15 +172,15 @@ repo_exists() {
 
 fail_no_release() {
     if repo_exists; then
-        echo "У репозитория ${REPO} на ${SERVER} нет опубликованных релизов." >&2
-        echo "Проверьте список: $(basename "$0") -s $SERVER -l $REPO" >&2
-        echo "Учтите: git-теги без созданного релиза для установки недоступны." >&2
+        echo "Repository ${REPO} on ${SERVER} has no published releases." >&2
+        echo "Check the list: $(basename "$0") -s $SERVER -l $REPO" >&2
+        echo "Note: git tags without a created release cannot be installed." >&2
     else
-        echo "Репозиторий ${REPO} не найден или нет доступа на ${SERVER}." >&2
+        echo "Repository ${REPO} was not found or is not accessible on ${SERVER}." >&2
         if [ -z "${GITEA_TOKEN:-}" ]; then
-            echo "Если репозиторий приватный — задайте GITEA_TOKEN (право read:repository)" >&2
+            echo "If the repository is private, set GITEA_TOKEN (read:repository scope)" >&2
         else
-            echo "Проверьте, что GITEA_TOKEN действителен и имеет право read:repository" >&2
+            echo "Check that GITEA_TOKEN is valid and has the read:repository scope" >&2
         fi
     fi
 }
@@ -210,18 +210,18 @@ check_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         _dir=$(dirname "$_archive")
         (cd "$_dir" && grep " ${_name}$" "$_sums" | sha256sum -c --quiet -) || {
-            echo "Проверка SHA256 не прошла — архив повреждён или подменён" >&2; return 1
+            echo "SHA256 verification failed - the archive is corrupted or tampered with" >&2; return 1
         }
     elif command -v shasum >/dev/null 2>&1; then
         _expected=$(grep " ${_name}$" "$_sums" | awk '{print $1}')
         _actual=$(shasum -a 256 "$_archive" | awk '{print $1}')
         if [ "$_expected" != "$_actual" ]; then
-            echo "Проверка SHA256 не прошла — архив повреждён или подменён" >&2; return 1
+            echo "SHA256 verification failed - the archive is corrupted or tampered with" >&2; return 1
         fi
     else
-        echo "Внимание: sha256sum/shasum не найдены, проверка целостности пропущена" >&2
+        echo "Warning: sha256sum/shasum not found, integrity check skipped" >&2
     fi
-    echo "Контрольная сумма совпадает"
+    echo "Checksum matches"
 }
 
 list_versions() {
@@ -278,21 +278,21 @@ do_install() {
         if command -v sudo >/dev/null 2>&1; then
             SUDO="sudo"
         else
-            echo "Каталог $TARGET_DIR недоступен на запись и sudo не найден." >&2; exit 1
+            echo "Directory $TARGET_DIR is not writable and sudo was not found." >&2; exit 1
         fi
     fi
 
     $SUDO mkdir -p "$TARGET_DIR"
     $SUDO install -m 0755 "$_bin_path" "$TARGET"
 
-    echo "Установлено: $TARGET${_bin_ver:+ (версия $_bin_ver)}"
+    echo "Installed: $TARGET${_bin_ver:+ (version $_bin_ver)}"
 
     case ":${PATH:-}:" in
         *":$TARGET_DIR:"*) ;;
         *)
             echo
-            echo "Внимание: $TARGET_DIR отсутствует в PATH."
-            echo "Добавьте в ~/.profile или ~/.bashrc / ~/.zshrc строку:"
+            echo "Warning: $TARGET_DIR is not in PATH."
+            echo "Add this line to ~/.profile or ~/.bashrc / ~/.zshrc:"
             echo "    export PATH=\"$TARGET_DIR:\$PATH\""
             ;;
     esac
@@ -307,14 +307,14 @@ extract_bin() {
     elif [ -x "$_workdir/${BIN}-${OS}-${ARCH}/$BIN" ]; then
         echo "$_workdir/${BIN}-${OS}-${ARCH}/$BIN"
     else
-        echo "Исполняемый файл '$BIN' не найден в архиве" >&2; return 1
+        echo "Executable '$BIN' not found in the archive" >&2; return 1
     fi
 }
 
 if [ "$LIST_ONLY" = "1" ]; then
     VERSIONS=$(list_versions) || exit 1
     if [ -z "$VERSIONS" ]; then
-        echo "У репозитория ${REPO} нет релизов" >&2; exit 1
+        echo "Repository ${REPO} has no releases" >&2; exit 1
     fi
     echo "$VERSIONS"
     exit 0
@@ -325,16 +325,16 @@ if [ -n "$FROM_FILE" ]; then
     SUMS_PATH="$(dirname "$ARCHIVE_PATH")/SHA256SUMS"
 
     if [ ! -f "$SUMS_PATH" ]; then
-        echo "Не найден SHA256SUMS рядом с архивом: $SUMS_PATH" >&2; exit 1
+        echo "No SHA256SUMS found next to the archive: $SUMS_PATH" >&2; exit 1
     fi
 
-    echo "Проверяю контрольную сумму $ARCHIVE_PATH"
+    echo "Verifying the checksum of $ARCHIVE_PATH"
     check_sha256 "$ARCHIVE_PATH" "$SUMS_PATH" || exit 1
 
     WORKDIR=$(mktemp -d)
     trap 'rm -rf "$WORKDIR"' EXIT
 
-    echo "Распаковываю"
+    echo "Extracting"
     BIN_PATH=$(extract_bin "$ARCHIVE_PATH" "$WORKDIR") || exit 1
     chmod +x "$BIN_PATH"
 
@@ -348,15 +348,15 @@ RELEASE_JSON=""
 if [ "$INTERACTIVE" = "1" ]; then
     VERSIONS=$(list_versions)
     if [ -z "$VERSIONS" ]; then
-        echo "Не удалось получить список версий" >&2; exit 1
+        echo "Failed to fetch the version list" >&2; exit 1
     fi
-    echo "Доступные версии:"
+    echo "Available versions:"
     i=1
     echo "$VERSIONS" | while IFS= read -r v; do
         printf "  %2d) %s\n" "$i" "$v"
         i=$((i + 1))
     done
-    printf "Введите номер или версию: "
+    printf "Enter a number or a version: "
     read -r CHOICE </dev/tty
     case "$CHOICE" in
         ''|*[!0-9]*)
@@ -367,7 +367,7 @@ if [ "$INTERACTIVE" = "1" ]; then
         *)
             TAG=$(echo "$VERSIONS" | sed -n "${CHOICE}p")
             if [ -z "$TAG" ]; then
-                echo "Неверный номер: $CHOICE" >&2; exit 1
+                echo "Invalid number: $CHOICE" >&2; exit 1
             fi ;;
     esac
 elif [ -z "$VERSION" ]; then
@@ -378,7 +378,7 @@ elif [ -z "$VERSION" ]; then
     TAG=$(echo "$RELEASE_JSON" | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
         | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
     if [ -z "$TAG" ]; then
-        echo "Не удалось определить последнюю версию" >&2; exit 1
+        echo "Failed to determine the latest version" >&2; exit 1
     fi
 else
     case "$VERSION" in
@@ -393,8 +393,8 @@ if [ -z "$BIN" ]; then
     fi
     BIN=$(discover_bin "$RELEASE_JSON")
     if [ -z "$BIN" ]; then
-        echo "Не найден ассет *-${OS}-${ARCH}.tar.gz в релизе ${TAG}" >&2
-        echo "Укажите имя бинаря явно: $(basename "$0") -s $SERVER $REPO <имя-бинаря>" >&2
+        echo "No asset *-${OS}-${ARCH}.tar.gz found in release ${TAG}" >&2
+        echo "Specify the binary name explicitly: $(basename "$0") -s $SERVER $REPO <binary-name>" >&2
         exit 1
     fi
 fi
@@ -409,24 +409,24 @@ ARCHIVE_URL=$(asset_url "$ARCHIVE")
 SUMS_URL=$(asset_url "SHA256SUMS")
 
 if [ -z "$ARCHIVE_URL" ]; then
-    echo "Ассет $ARCHIVE не найден в релизе ${TAG}" >&2; exit 1
+    echo "Asset $ARCHIVE not found in release ${TAG}" >&2; exit 1
 fi
 if [ -z "$SUMS_URL" ]; then
-    echo "Ассет SHA256SUMS не найден в релизе ${TAG}" >&2; exit 1
+    echo "Asset SHA256SUMS not found in release ${TAG}" >&2; exit 1
 fi
 
 if [ "$DOWNLOAD_ONLY" = "1" ]; then
     DEST_DIR="$(pwd)"
     mkdir -p "$DEST_DIR"
 
-    echo "Скачиваю $ARCHIVE_URL"
+    echo "Downloading $ARCHIVE_URL"
     if ! download_file "$ARCHIVE_URL" "$DEST_DIR/$ARCHIVE" 1; then
-        echo "Не удалось скачать архив" >&2; exit 1
+        echo "Failed to download the archive" >&2; exit 1
     fi
 
-    echo "Скачиваю SHA256SUMS"
+    echo "Downloading SHA256SUMS"
     if ! download_file "$SUMS_URL" "$DEST_DIR/SHA256SUMS"; then
-        echo "Не удалось скачать SHA256SUMS" >&2; exit 1
+        echo "Failed to download SHA256SUMS" >&2; exit 1
     fi
 
     check_sha256 "$DEST_DIR/$ARCHIVE" "$DEST_DIR/SHA256SUMS" || {
@@ -446,37 +446,37 @@ if [ "$UPDATE_ONLY" = "1" ]; then
     fi
     LATEST_VER="${TAG#v}"
     if [ "$CURRENT" = "$LATEST_VER" ]; then
-        echo "$BIN уже актуален (версия $CURRENT)"
+        echo "$BIN is already up to date (version $CURRENT)"
         exit 0
     fi
-    echo "Обновление $BIN: $CURRENT -> $LATEST_VER"
+    echo "Updating $BIN: $CURRENT -> $LATEST_VER"
 fi
 
 TMPDIR=$(mktemp -d)
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
-echo "Скачиваю $ARCHIVE_URL"
+echo "Downloading $ARCHIVE_URL"
 if ! download_file "$ARCHIVE_URL" "$TMPDIR/$ARCHIVE" 1; then
-    echo "Не удалось скачать архив" >&2; exit 1
+    echo "Failed to download the archive" >&2; exit 1
 fi
 
-echo "Скачиваю SHA256SUMS"
+echo "Downloading SHA256SUMS"
 if ! download_file "$SUMS_URL" "$TMPDIR/SHA256SUMS"; then
-    echo "Не удалось скачать SHA256SUMS" >&2; exit 1
+    echo "Failed to download SHA256SUMS" >&2; exit 1
 fi
 
-echo "Проверяю контрольную сумму"
+echo "Verifying the checksum"
 check_sha256 "$TMPDIR/$ARCHIVE" "$TMPDIR/SHA256SUMS" || exit 1
 
-echo "Распаковываю"
+echo "Extracting"
 BIN_PATH=$(extract_bin "$TMPDIR/$ARCHIVE" "$TMPDIR") || exit 1
 chmod +x "$BIN_PATH"
 
 EXPECTED_VER="${TAG#v}"
 ACTUAL_VER=$("$BIN_PATH" --version 2>/dev/null || true)
 if [ -n "$ACTUAL_VER" ] && [ "$ACTUAL_VER" != "$EXPECTED_VER" ]; then
-    echo "Внимание: версия бинаря ($ACTUAL_VER) не совпадает с тегом ($EXPECTED_VER)" >&2
+    echo "Warning: the binary version ($ACTUAL_VER) does not match the tag ($EXPECTED_VER)" >&2
 fi
 
 do_install "$BIN_PATH" "${ACTUAL_VER:-$EXPECTED_VER}"
