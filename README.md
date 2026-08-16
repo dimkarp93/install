@@ -3,12 +3,14 @@
 Универсальный установщик программ из GitHub и Gitea Releases и шаблон CI-релиза.
 
 Программа может быть написана на любом языке — установщикам важны лишь готовый исполняемый
-файл и соблюдение [конвенций](CONVENTIONS.md).
+файл и соблюдение [конвенций](CONVENTIONS.md). Отдельно есть `go_install.sh` — необязательный
+установщик для Go-программ поверх штатного `go install`, для тех, у кого уже стоит Go.
 
 ## Установка установщиков в PATH
 
 Чтобы не вводить длинную команду `curl` каждый раз, установите установщики
-(`github_install.sh`, `gitea_install.sh`, `local_install.sh` и `check_install.sh`) в PATH один раз:
+(`github_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh` и
+`check_install.sh`) в PATH один раз:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/bootstrap.sh | sh
@@ -220,6 +222,80 @@ gitea_install.sh -u owner/private-repo
 
 Без токена приватный репозиторий недоступен: Gitea ответит `401`/`404`, и скрипт подскажет задать
 `GITEA_TOKEN`. Публичным репозиториям токен не нужен.
+
+## Установка Go-программ через `go install` (`go_install.sh`)
+
+`go_install.sh` — необязательная альтернатива для тех, у кого уже установлен Go.
+Он не скачивает релизные архивы, а собирает программу штатным `go install` прямо из
+исходников модуля и кладёт исполняемый файл в PATH.
+
+```sh
+go_install.sh github.com/dimkarp93/md-pdf
+go_install.sh --user-only github.com/dimkarp93/md-pdf
+go_install.sh github.com/dimkarp93/md-pdf 0.3.0
+go_install.sh --list github.com/dimkarp93/md-pdf
+```
+
+Релиз, архивы и `SHA256SUMS` при этом не нужны — версия берётся из git-тега
+репозитория, а целостность публичных модулей проверяет `sum.golang.org`.
+
+### Когда использовать, а когда нет
+
+Используйте `go_install.sh`, если Go уже стоит, программа написана на Go и её модуль
+соответствует [Go-конвенциям](CONVENTIONS.md#go-программы-требования-для-go-install-необязательно).
+
+Используйте `github_install.sh` / `gitea_install.sh`, если:
+
+- на машине нет Go (установщики релизов ставят готовый бинарь и Go не требуют);
+- программа написана не на Go;
+- машина в закрытом контуре: зависимости модуля тянутся с `proxy.golang.org` или
+  напрямую с github.com, тогда как установщику релизов достаточно доступа к самому
+  Gitea.
+
+Флаги `-D`, `-F`, `-i`, `-u` не поддерживаются: у `go install` нет промежуточного
+архива, на котором эти сценарии построены. Для них используйте `github_install.sh` или
+`gitea_install.sh`.
+
+### Определение пакета и имени бинаря
+
+Имя исполняемого файла `go install` берёт из последнего сегмента пути пакета. Скрипт
+сначала пробует `<модуль>/cmd/<имя>` (рекомендуемая структура), затем корень модуля.
+Суффикс major-версии (`/v2`, `/v3`) при вычислении имени отбрасывается. Путь пакета
+можно задать явно:
+
+```sh
+go_install.sh -p golang.org/x/tools/cmd/stringer golang.org/x/tools
+```
+
+### Каталог установки
+
+По умолчанию — `/usr/local/bin` (при необходимости через `sudo`), с `--user-only` —
+`~/.local/bin`. Флаг `--gobin` оставляет бинарь там, куда его кладёт сам `go install`
+(`$GOBIN`, по умолчанию `~/go/bin`).
+
+### Приватные репозитории
+
+Прокси `proxy.golang.org` приватные модули не отдаёт, поэтому нужно указать `go`
+ходить в git напрямую и настроить доступ:
+
+```sh
+export GOPRIVATE='github.com/dimkarp93/*'
+go_install.sh github.com/dimkarp93/md-pdf
+```
+
+Доступ git настраивается обычным способом — SSH-ключ или `~/.netrc`. Токены
+`GITHUB_TOKEN` / `GITEA_TOKEN` здесь не используются: их понимают только
+`github_install.sh` и `gitea_install.sh`.
+
+Для модуля в Gitea путь модуля должен начинаться с адреса инстанса
+(`module git.example.com/owner/repo`), а `GOPRIVATE` — включать этот хост. Если Gitea
+доступна только по SSH на нестандартном порту, добавьте подмену:
+
+```sh
+git config --global url."ssh://git@git.example.com:2222/".insteadOf "https://git.example.com/"
+export GOPRIVATE='git.example.com/*'
+go_install.sh git.example.com/owner/repo
+```
 
 ## Локальная установка из исходников (`local_install.sh`)
 
