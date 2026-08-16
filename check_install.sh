@@ -3,18 +3,18 @@ set -eu
 
 usage() {
     cat <<EOF
-Использование: $(basename "$0") [ФЛАГИ] [путь]
+Usage: $(basename "$0") [FLAGS] [path]
 
-Проверяет, соответствует ли репозиторий конвенциям из CONVENTIONS.md.
+Checks whether a repository follows the conventions from CONVENTIONS.md.
 
-  --build       дополнительно собрать бинарь и проверить вывод --version
-  -h, --help    эта справка
+  --build       additionally build the binary and check its --version output
+  -h, --help    show this help
 
-  [путь]  абсолютный путь к репозиторию или относительный — ищется по
-          корням из ~/.config/install/roots.txt (дефолт: ~/tools).
-          Если путь не указан, используется текущий каталог.
+  [path]  absolute path to the repository, or a relative one - looked up in
+          the roots from ~/.config/install/roots.txt (default: ~/tools).
+          If no path is given, the current directory is used.
 
-Код выхода 0 — все обязательные проверки пройдены; 1 — есть ошибки.
+Exit code 0 - all required checks passed; 1 - there are errors.
 EOF
 }
 
@@ -25,12 +25,12 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --build) DO_BUILD=1; shift ;;
-        -*) echo "Неизвестный флаг: $1" >&2; usage >&2; exit 1 ;;
+        -*) echo "Unknown flag: $1" >&2; usage >&2; exit 1 ;;
         *)
             if [ -z "$PROGRAM_PATH" ]; then
                 PROGRAM_PATH="$1"
             else
-                echo "Ошибка: указан лишний аргумент: $1" >&2; usage >&2; exit 1
+                echo "Error: unexpected extra argument: $1" >&2; usage >&2; exit 1
             fi
             shift ;;
     esac
@@ -40,7 +40,7 @@ if [ -z "$PROGRAM_PATH" ]; then
     PROGRAM_PATH="$(pwd)"
 fi
 
-# --- вспомогательные функции ---
+# --- helpers ---
 
 expand_tilde() {
     case "$1" in
@@ -50,7 +50,7 @@ expand_tilde() {
     esac
 }
 
-# Записывает список корней (по одному на строку) в файл $1
+# Writes the list of roots (one per line) into file $1
 write_roots() {
     _out="$1"
     _roots_file="$HOME/.config/install/roots.txt"
@@ -76,7 +76,7 @@ ok()   { printf '  [OK]   %s\n'   "$1"; }
 warn() { printf '  [WARN] %s\n'   "$1"; WARNINGS=$((WARNINGS + 1)); }
 fail() { printf '  [FAIL] %s\n'   "$1"; ERRORS=$((ERRORS + 1)); }
 
-# --- резолв пути (как в local_install.sh) ---
+# --- path resolution (same as in local_install.sh) ---
 
 case "$PROGRAM_PATH" in
     /*)
@@ -94,7 +94,7 @@ case "$PROGRAM_PATH" in
             fi
         done < "$_roots_tmp"
         if [ -z "$REPO_DIR" ]; then
-            echo "Репозиторий '$PROGRAM_PATH' не найден. Просмотренные корни:" >&2
+            echo "Repository '$PROGRAM_PATH' not found. Roots searched:" >&2
             while IFS= read -r _root; do
                 [ -z "$_root" ] && continue
                 echo "  $_root" >&2
@@ -107,47 +107,47 @@ case "$PROGRAM_PATH" in
 esac
 
 if [ ! -d "$REPO_DIR" ]; then
-    echo "Ошибка: путь не является каталогом: $REPO_DIR" >&2; exit 1
+    echo "Error: path is not a directory: $REPO_DIR" >&2; exit 1
 fi
 REPO_DIR=$(cd "$REPO_DIR" && pwd)
 
-echo "Проверяю: $REPO_DIR"
+echo "Checking: $REPO_DIR"
 echo
 
 # --- git ---
 
-echo "git-репозиторий:"
+echo "git repository:"
 if [ -d "$REPO_DIR/.git" ]; then
-    ok "найден .git"
+    ok ".git found"
 else
-    fail "нет каталога .git"
+    fail "no .git directory"
 fi
 
 # --- versions.txt ---
 
-echo "Версия (versions.txt):"
+echo "Version (versions.txt):"
 if [ -f "$REPO_DIR/versions.txt" ]; then
     VERSION=$(tr -d '[:space:]' < "$REPO_DIR/versions.txt")
     if printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
         ok "versions.txt = $VERSION (semver X.Y.Z)"
     else
-        fail "versions.txt должен содержать semver X.Y.Z (получено: '$VERSION')"
+        fail "versions.txt must contain semver X.Y.Z (got: '$VERSION')"
         VERSION=""
     fi
 else
-    fail "нет versions.txt"
+    fail "no versions.txt"
     VERSION=""
 fi
 
-# --- имя бинаря (имя каталога) ---
+# --- binary name (directory name) ---
 
-echo "Имя бинаря:"
+echo "Binary name:"
 BIN=$(basename "$REPO_DIR")
-ok "имя бинаря из имени каталога = $BIN"
+ok "binary name from directory name = $BIN"
 
-# --- build-таргет ---
+# --- build target ---
 
-echo "Сборка (build-таргет):"
+echo "Build (build target):"
 HAS_JUST_FILE=0
 HAS_MAKE_FILE=0
 BUILD_FILE=""
@@ -161,28 +161,28 @@ if [ -f "$REPO_DIR/Makefile" ] || [ -f "$REPO_DIR/makefile" ]; then
 fi
 
 if [ "$HAS_JUST_FILE" = "0" ] && [ "$HAS_MAKE_FILE" = "0" ]; then
-    fail "нет Justfile и Makefile"
+    fail "neither Justfile nor Makefile"
 else
     if grep -Eq '^build( |:)' "$BUILD_FILE" 2>/dev/null; then
-        ok "есть таргет build в $(basename "$BUILD_FILE")"
+        ok "build target present in $(basename "$BUILD_FILE")"
     else
-        fail "в $(basename "$BUILD_FILE") нет таргета build"
+        fail "no build target in $(basename "$BUILD_FILE")"
     fi
-    # bump-рецепты — рекомендация
+    # bump recipes - recommended
     _missing=""
     for _r in bump-patch bump-minor bump-major; do
         grep -Eq "^${_r}( |:)" "$BUILD_FILE" 2>/dev/null || _missing="$_missing $_r"
     done
     if [ -z "$_missing" ]; then
-        ok "есть рецепты bump-patch/bump-minor/bump-major"
+        ok "bump-patch/bump-minor/bump-major recipes present"
     else
-        warn "нет рецептов:$_missing"
+        warn "missing recipes:$_missing"
     fi
 fi
 
 # --- release-workflow ---
 
-echo "Release-workflow:"
+echo "Release workflow:"
 _wf_found=0
 for _f in "$REPO_DIR"/.github/workflows/*.yml "$REPO_DIR"/.github/workflows/*.yaml \
           "$REPO_DIR"/.gitea/workflows/*.yml "$REPO_DIR"/.gitea/workflows/*.yaml; do
@@ -191,33 +191,33 @@ for _f in "$REPO_DIR"/.github/workflows/*.yml "$REPO_DIR"/.github/workflows/*.ya
     break
 done
 if [ "$_wf_found" = "1" ]; then
-    ok "найден .github/workflows/*.yml или .gitea/workflows/*.yml"
+    ok ".github/workflows/*.yml or .gitea/workflows/*.yml found"
 else
-    warn "нет .github/workflows/*.yml и .gitea/workflows/*.yml (релиз не будет публиковаться автоматически)"
+    warn "no .github/workflows/*.yml and no .gitea/workflows/*.yml (releases will not be published automatically)"
 fi
 
-# --- git-теги (рекомендация) ---
+# --- git tags (recommended) ---
 
-echo "Git-теги:"
+echo "Git tags:"
 if [ -d "$REPO_DIR/.git" ] && command -v git >/dev/null 2>&1; then
     _bad_tags=$(cd "$REPO_DIR" && git tag 2>/dev/null | grep -Ev '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
     _any_tags=$(cd "$REPO_DIR" && git tag 2>/dev/null | head -1 || true)
     if [ -z "$_any_tags" ]; then
-        ok "тегов пока нет"
+        ok "no tags yet"
     elif [ -n "$_bad_tags" ]; then
-        warn "есть теги не вида vMAJOR.MINOR.PATCH:"
+        warn "there are tags not shaped like vMAJOR.MINOR.PATCH:"
         printf '%s\n' "$_bad_tags" | sed 's/^/         /'
     else
-        ok "все теги вида vMAJOR.MINOR.PATCH"
+        ok "all tags shaped like vMAJOR.MINOR.PATCH"
     fi
 else
-    warn "git недоступен — теги не проверены"
+    warn "git is unavailable - tags were not checked"
 fi
 
-# --- опциональная сборка и проверка --version ---
+# --- optional build and --version check ---
 
 if [ "$DO_BUILD" = "1" ]; then
-    echo "Сборка и --version (--build):"
+    echo "Build and --version (--build):"
     BUILD_CMD=""
     if [ "$HAS_JUST_FILE" = "1" ] && command -v just >/dev/null 2>&1; then
         BUILD_CMD="just build"
@@ -225,38 +225,38 @@ if [ "$DO_BUILD" = "1" ]; then
         BUILD_CMD="make build"
     fi
     if [ -z "$BUILD_CMD" ]; then
-        warn "нет доступного сборщика (just/make) — сборка пропущена"
+        warn "no available builder (just/make) - build skipped"
     elif (cd "$REPO_DIR" && $BUILD_CMD >/dev/null 2>&1); then
         BIN_PATH="$REPO_DIR/$BIN"
         if [ ! -x "$BIN_PATH" ]; then
-            fail "бинарь '$BIN' не найден в корне репозитория после сборки"
+            fail "binary '$BIN' not found in the repository root after the build"
         else
-            ok "бинарь '$BIN' собран в корне репозитория"
+            ok "binary '$BIN' built in the repository root"
             _ver=$("$BIN_PATH" --version 2>/dev/null || true)
             if [ -z "$_ver" ]; then
-                fail "--version ничего не вывел"
+                fail "--version printed nothing"
             elif [ -n "$VERSION" ] && [ "$_ver" != "$VERSION" ]; then
-                fail "--version вывел '$_ver', ожидалось '$VERSION' (из versions.txt)"
+                fail "--version printed '$_ver', expected '$VERSION' (from versions.txt)"
             else
                 ok "--version = $_ver"
             fi
         fi
     else
-        fail "сборка ($BUILD_CMD) завершилась с ошибкой"
+        fail "the build ($BUILD_CMD) failed"
     fi
 fi
 
-# --- итог ---
+# --- summary ---
 
 echo
 if [ "$ERRORS" -eq 0 ]; then
     if [ "$WARNINGS" -eq 0 ]; then
-        echo "Готово: репозиторий полностью соответствует конвенциям."
+        echo "Done: the repository fully follows the conventions."
     else
-        echo "Готово: обязательные требования выполнены, предупреждений — $WARNINGS."
+        echo "Done: required checks passed, warnings: $WARNINGS."
     fi
     exit 0
 else
-    echo "Не пройдено: ошибок — $ERRORS, предупреждений — $WARNINGS."
+    echo "Failed: errors: $ERRORS, warnings: $WARNINGS."
     exit 1
 fi

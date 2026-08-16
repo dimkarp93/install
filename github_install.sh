@@ -3,28 +3,28 @@ set -eu
 
 usage() {
     cat <<EOF
-Использование: $(basename "$0") [ФЛАГИ] <владелец/репозиторий> [имя-бинаря] [версия]
-         или: $(basename "$0") -F <архив.tar.gz> [имя-бинаря]
+Usage: $(basename "$0") [FLAGS] <owner/repository> [binary-name] [version]
+   or: $(basename "$0") -F <archive.tar.gz> [binary-name]
 
-Скачивает и устанавливает программу из GitHub Releases.
+Downloads and installs a program from GitHub Releases.
 
-  -i               выбрать версию интерактивно из списка
-  -l, --list       вывести доступные версии и выйти
-  -u, --update     установить, только если доступная версия новее текущей
-  -D, --download   только скачать архив + SHA256SUMS и проверить сумму;
-                   вывести путь до архива; файлы сохраняются в текущий каталог
-  -F, --from-file  установить из локального архива (проверив SHA256SUMS рядом);
-                   игнорирует версию, -i, -u; имя-бинаря берётся из имени файла
-  --user-only      установить в ~/.local/bin (без sudo); по умолчанию — /usr/local/bin
-  -h, --help       эта справка
+  -i               pick the version interactively from a list
+  -l, --list       print the available versions and exit
+  -u, --update     install only if the available version is newer than the current one
+  -D, --download   only download the archive + SHA256SUMS and verify the checksum;
+                   print the archive path; files are saved into the current directory
+  -F, --from-file  install from a local archive (verifying the SHA256SUMS next to it);
+                   ignores version, -i, -u; the binary name is taken from the file name
+  --user-only      install into ~/.local/bin (no sudo); default is /usr/local/bin
+  -h, --help       show this help
 
-  <владелец/репозиторий>  например: owner/repo
-  [имя-бинаря]            имя исполняемого файла (по умолчанию: имя репозитория)
-  [версия]                semver вида 1.2.3 или v1.2.3 (по умолчанию: latest)
+  <owner/repository>  e.g.: owner/repo
+  [binary-name]       name of the executable (default: repository name)
+  [version]           semver like 1.2.3 or v1.2.3 (default: latest)
 
-Переменные среды:
-  GITHUB_TOKEN    токен GitHub: снимает лимит 60 req/h и разрешает
-                  установку из приватных репозиториев
+Environment variables:
+  GITHUB_TOKEN    GitHub token: lifts the 60 req/h limit and allows
+                  installing from private repositories
 EOF
 }
 
@@ -48,11 +48,11 @@ while [ $# -gt 0 ]; do
         --user-only) USER_ONLY=1; shift ;;
         -F|--from-file)
             if [ $# -lt 2 ]; then
-                echo "Флаг --from-file требует аргумент" >&2; exit 1
+                echo "Flag --from-file requires an argument" >&2; exit 1
             fi
             FROM_FILE="$2"; shift 2 ;;
         --from-file=*) FROM_FILE="${1#--from-file=}"; shift ;;
-        -*) echo "Неизвестный флаг: $1" >&2; usage >&2; exit 1 ;;
+        -*) echo "Unknown flag: $1" >&2; usage >&2; exit 1 ;;
         *)
             if [ -z "$REPO" ]; then
                 REPO="$1"
@@ -66,28 +66,28 @@ while [ $# -gt 0 ]; do
 done
 
 if ! command -v curl >/dev/null 2>&1; then
-    echo "Требуется curl" >&2; exit 1
+    echo "curl is required" >&2; exit 1
 fi
 
 case "$(uname -s)" in
     Linux)  OS=linux ;;
     Darwin) OS=darwin ;;
-    *) echo "Неподдерживаемая ОС: $(uname -s)" >&2; exit 1 ;;
+    *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
 
 case "$(uname -m)" in
     x86_64|amd64)   ARCH=amd64 ;;
     aarch64|arm64)  ARCH=arm64 ;;
-    *) echo "Неподдерживаемая архитектура: $(uname -m)" >&2; exit 1 ;;
+    *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-# --- валидация аргументов ---
+# --- argument validation ---
 
 if [ -n "$FROM_FILE" ]; then
     if [ ! -f "$FROM_FILE" ]; then
-        echo "Файл не найден: $FROM_FILE" >&2; exit 1
+        echo "File not found: $FROM_FILE" >&2; exit 1
     fi
-    # первый позиционный (REPO) без '/' трактуем как имя бинаря
+    # the first positional (REPO) without '/' is treated as the binary name
     if [ -n "$REPO" ] && [ -z "$BIN" ]; then
         case "$REPO" in
             */*) ;;
@@ -98,23 +98,23 @@ if [ -n "$FROM_FILE" ]; then
         _base=$(basename "$FROM_FILE" .tar.gz)
         BIN="${_base%-${OS}-${ARCH}}"
         if [ -z "$BIN" ] || [ "$BIN" = "$(basename "$FROM_FILE" .tar.gz)" ]; then
-            echo "Не удалось определить имя бинаря из имени файла: $(basename "$FROM_FILE")" >&2
-            echo "Укажите имя явно: $(basename "$0") -F $FROM_FILE <имя-бинаря>" >&2
+            echo "Failed to determine the binary name from the file name: $(basename "$FROM_FILE")" >&2
+            echo "Specify the name explicitly: $(basename "$0") -F $FROM_FILE <binary-name>" >&2
             exit 1
         fi
     fi
 else
     if [ -z "$REPO" ]; then
-        echo "Ошибка: укажите владелец/репозиторий" >&2
+        echo "Error: specify owner/repository" >&2
         usage >&2; exit 1
     fi
     case "$REPO" in
         */*)  ;;
-        *) echo "Ошибка: формат должен быть владелец/репозиторий (например, dimkarp93/envs)" >&2; exit 1 ;;
+        *) echo "Error: the format must be owner/repository (e.g. dimkarp93/envs)" >&2; exit 1 ;;
     esac
 fi
 
-# --- вспомогательные функции ---
+# --- helpers ---
 
 api_get() {
     _url="$1"
@@ -125,7 +125,7 @@ api_get() {
     if [ "$_http" != "200" ]; then
         cat "$_out" >&2 2>/dev/null || true
         rm -f "$_out"
-        echo "GitHub API вернул HTTP $_http для $_url" >&2
+        echo "GitHub API returned HTTP $_http for $_url" >&2
         return 1
     fi
     cat "$_out"
@@ -158,18 +158,18 @@ check_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         _dir=$(dirname "$_archive")
         (cd "$_dir" && grep " ${_name}$" "$_sums" | sha256sum -c --quiet -) || {
-            echo "Проверка SHA256 не прошла — архив повреждён или подменён" >&2; return 1
+            echo "SHA256 verification failed - the archive is corrupted or tampered with" >&2; return 1
         }
     elif command -v shasum >/dev/null 2>&1; then
         _expected=$(grep " ${_name}$" "$_sums" | awk '{print $1}')
         _actual=$(shasum -a 256 "$_archive" | awk '{print $1}')
         if [ "$_expected" != "$_actual" ]; then
-            echo "Проверка SHA256 не прошла — архив повреждён или подменён" >&2; return 1
+            echo "SHA256 verification failed - the archive is corrupted or tampered with" >&2; return 1
         fi
     else
-        echo "Внимание: sha256sum/shasum не найдены, проверка целостности пропущена" >&2
+        echo "Warning: sha256sum/shasum not found, integrity check skipped" >&2
     fi
-    echo "Контрольная сумма совпадает"
+    echo "Checksum matches"
 }
 
 list_versions() {
@@ -196,12 +196,12 @@ discover_bin() {
         | sed -E "s/-${OS}-${ARCH}\\.tar\\.gz\$//"
 }
 
-# Достаёт API-URL ассета (https://api.github.com/.../releases/assets/<id>)
-# по его имени из JSON релиза. Нужен для приватных репозиториев: ссылка
-# browser_download_url (github.com/.../releases/download/...) не принимает
-# токен и отдаёт 404, а API-эндпоинт с Accept: application/octet-stream — да.
-# Расчёт на то, что GitHub возвращает по одному полю на строку и поле "url"
-# ассета идёт перед его "name".
+# Extracts the asset API URL (https://api.github.com/.../releases/assets/<id>)
+# by asset name from the release JSON. Needed for private repositories: the
+# browser_download_url link (github.com/.../releases/download/...) does not
+# accept the token and returns 404, while the API endpoint with
+# Accept: application/octet-stream does. This relies on GitHub returning one
+# field per line, with the asset "url" field preceding its "name".
 asset_api_url() {
     echo "$RELEASE_JSON" | awk -v target="$1" '
         /"url":/  { url = $0 }
@@ -235,21 +235,21 @@ do_install() {
         if command -v sudo >/dev/null 2>&1; then
             SUDO="sudo"
         else
-            echo "Каталог $TARGET_DIR недоступен на запись и sudo не найден." >&2; exit 1
+            echo "Directory $TARGET_DIR is not writable and sudo was not found." >&2; exit 1
         fi
     fi
 
     $SUDO mkdir -p "$TARGET_DIR"
     $SUDO install -m 0755 "$_bin_path" "$TARGET"
 
-    echo "Установлено: $TARGET${_bin_ver:+ (версия $_bin_ver)}"
+    echo "Installed: $TARGET${_bin_ver:+ (version $_bin_ver)}"
 
     case ":${PATH:-}:" in
         *":$TARGET_DIR:"*) ;;
         *)
             echo
-            echo "Внимание: $TARGET_DIR отсутствует в PATH."
-            echo "Добавьте в ~/.profile или ~/.bashrc / ~/.zshrc строку:"
+            echo "Warning: $TARGET_DIR is not in PATH."
+            echo "Add this line to ~/.profile or ~/.bashrc / ~/.zshrc:"
             echo "    export PATH=\"$TARGET_DIR:\$PATH\""
             ;;
     esac
@@ -264,38 +264,38 @@ extract_bin() {
     elif [ -x "$_workdir/${BIN}-${OS}-${ARCH}/$BIN" ]; then
         echo "$_workdir/${BIN}-${OS}-${ARCH}/$BIN"
     else
-        echo "Исполняемый файл '$BIN' не найден в архиве" >&2; return 1
+        echo "Executable '$BIN' not found in the archive" >&2; return 1
     fi
 }
 
-# --- режим: только список версий ---
+# --- mode: list versions only ---
 
 if [ "$LIST_ONLY" = "1" ]; then
     VERSIONS=$(list_versions) || exit 1
     if [ -z "$VERSIONS" ]; then
-        echo "У репозитория ${REPO} нет релизов" >&2; exit 1
+        echo "Repository ${REPO} has no releases" >&2; exit 1
     fi
     echo "$VERSIONS"
     exit 0
 fi
 
-# --- режим: установка из локального архива ---
+# --- mode: install from a local archive ---
 
 if [ -n "$FROM_FILE" ]; then
     ARCHIVE_PATH=$(cd "$(dirname "$FROM_FILE")" && pwd)/$(basename "$FROM_FILE")
     SUMS_PATH="$(dirname "$ARCHIVE_PATH")/SHA256SUMS"
 
     if [ ! -f "$SUMS_PATH" ]; then
-        echo "Не найден SHA256SUMS рядом с архивом: $SUMS_PATH" >&2; exit 1
+        echo "No SHA256SUMS found next to the archive: $SUMS_PATH" >&2; exit 1
     fi
 
-    echo "Проверяю контрольную сумму $ARCHIVE_PATH"
+    echo "Verifying the checksum of $ARCHIVE_PATH"
     check_sha256 "$ARCHIVE_PATH" "$SUMS_PATH" || exit 1
 
     WORKDIR=$(mktemp -d)
     trap 'rm -rf "$WORKDIR"' EXIT
 
-    echo "Распаковываю"
+    echo "Extracting"
     BIN_PATH=$(extract_bin "$ARCHIVE_PATH" "$WORKDIR") || exit 1
     chmod +x "$BIN_PATH"
 
@@ -304,22 +304,22 @@ if [ -n "$FROM_FILE" ]; then
     exit 0
 fi
 
-# --- разрешение тега (сетевые режимы) ---
+# --- tag resolution (network modes) ---
 
 RELEASE_JSON=""
 
 if [ "$INTERACTIVE" = "1" ]; then
     VERSIONS=$(list_versions)
     if [ -z "$VERSIONS" ]; then
-        echo "Не удалось получить список версий" >&2; exit 1
+        echo "Failed to fetch the version list" >&2; exit 1
     fi
-    echo "Доступные версии:"
+    echo "Available versions:"
     i=1
     echo "$VERSIONS" | while IFS= read -r v; do
         printf "  %2d) %s\n" "$i" "$v"
         i=$((i + 1))
     done
-    printf "Введите номер или версию: "
+    printf "Enter a number or a version: "
     read -r CHOICE </dev/tty
     case "$CHOICE" in
         ''|*[!0-9]*)
@@ -330,7 +330,7 @@ if [ "$INTERACTIVE" = "1" ]; then
         *)
             TAG=$(echo "$VERSIONS" | sed -n "${CHOICE}p")
             if [ -z "$TAG" ]; then
-                echo "Неверный номер: $CHOICE" >&2; exit 1
+                echo "Invalid number: $CHOICE" >&2; exit 1
             fi ;;
     esac
 elif [ -z "$VERSION" ]; then
@@ -338,7 +338,7 @@ elif [ -z "$VERSION" ]; then
     TAG=$(echo "$RELEASE_JSON" | grep '"tag_name":' | head -1 \
         | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [ -z "$TAG" ]; then
-        echo "Не удалось определить последнюю версию" >&2; exit 1
+        echo "Failed to determine the latest version" >&2; exit 1
     fi
 else
     case "$VERSION" in
@@ -347,7 +347,7 @@ else
     esac
 fi
 
-# --- автообнаружение имени бинаря из ассетов релиза ---
+# --- auto-detect the binary name from the release assets ---
 
 if [ -z "$BIN" ]; then
     if [ -z "$RELEASE_JSON" ]; then
@@ -355,16 +355,16 @@ if [ -z "$BIN" ]; then
     fi
     BIN=$(discover_bin "$RELEASE_JSON")
     if [ -z "$BIN" ]; then
-        echo "Не найден ассет *-${OS}-${ARCH}.tar.gz в релизе ${TAG}" >&2
-        echo "Укажите имя бинаря явно: $(basename "$0") $REPO <имя-бинаря>" >&2
+        echo "No asset *-${OS}-${ARCH}.tar.gz found in release ${TAG}" >&2
+        echo "Specify the binary name explicitly: $(basename "$0") $REPO <binary-name>" >&2
         exit 1
     fi
 fi
 
 ARCHIVE="${BIN}-${OS}-${ARCH}.tar.gz"
 
-# Для приватных репозиториев прямой browser_download_url не принимает токен —
-# качаем через API asset endpoint. Для публичных оставляем простую ссылку.
+# For private repositories the direct browser_download_url does not accept the
+# token, so we download via the API asset endpoint. Public ones keep the plain link.
 if [ -n "${GITHUB_TOKEN:-}" ]; then
     if [ -z "$RELEASE_JSON" ]; then
         RELEASE_JSON=$(get_release "$TAG") || exit 1
@@ -372,30 +372,30 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
     ARCHIVE_URL=$(asset_api_url "$ARCHIVE")
     SUMS_URL=$(asset_api_url "SHA256SUMS")
     if [ -z "$ARCHIVE_URL" ]; then
-        echo "Ассет $ARCHIVE не найден в релизе ${TAG}" >&2; exit 1
+        echo "Asset $ARCHIVE not found in release ${TAG}" >&2; exit 1
     fi
     if [ -z "$SUMS_URL" ]; then
-        echo "Ассет SHA256SUMS не найден в релизе ${TAG}" >&2; exit 1
+        echo "Asset SHA256SUMS not found in release ${TAG}" >&2; exit 1
     fi
 else
     ARCHIVE_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
     SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
 fi
 
-# --- режим: только скачать ---
+# --- mode: download only ---
 
 if [ "$DOWNLOAD_ONLY" = "1" ]; then
     DEST_DIR="$(pwd)"
     mkdir -p "$DEST_DIR"
 
-    echo "Скачиваю $ARCHIVE_URL"
+    echo "Downloading $ARCHIVE_URL"
     if ! download_file "$ARCHIVE_URL" "$DEST_DIR/$ARCHIVE" 1; then
-        echo "Не удалось скачать архив" >&2; exit 1
+        echo "Failed to download the archive" >&2; exit 1
     fi
 
-    echo "Скачиваю SHA256SUMS"
+    echo "Downloading SHA256SUMS"
     if ! download_file "$SUMS_URL" "$DEST_DIR/SHA256SUMS"; then
-        echo "Не удалось скачать SHA256SUMS" >&2; exit 1
+        echo "Failed to download SHA256SUMS" >&2; exit 1
     fi
 
     check_sha256 "$DEST_DIR/$ARCHIVE" "$DEST_DIR/SHA256SUMS" || {
@@ -403,13 +403,13 @@ if [ "$DOWNLOAD_ONLY" = "1" ]; then
         exit 1
     }
 
-    # единственный вывод в stdout — путь до архива (остальное шло в stderr через echo)
+    # the only stdout output is the archive path (everything else went to stderr)
     DEST_ABS=$(cd "$DEST_DIR" && pwd)/$ARCHIVE
     echo "$DEST_ABS"
     exit 0
 fi
 
-# --- режим: полная установка ---
+# --- mode: full install ---
 
 if [ "$UPDATE_ONLY" = "1" ]; then
     CURRENT=""
@@ -418,37 +418,37 @@ if [ "$UPDATE_ONLY" = "1" ]; then
     fi
     LATEST_VER="${TAG#v}"
     if [ "$CURRENT" = "$LATEST_VER" ]; then
-        echo "$BIN уже актуален (версия $CURRENT)"
+        echo "$BIN is already up to date (version $CURRENT)"
         exit 0
     fi
-    echo "Обновление $BIN: $CURRENT -> $LATEST_VER"
+    echo "Updating $BIN: $CURRENT -> $LATEST_VER"
 fi
 
 TMPDIR=$(mktemp -d)
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
-echo "Скачиваю $ARCHIVE_URL"
+echo "Downloading $ARCHIVE_URL"
 if ! download_file "$ARCHIVE_URL" "$TMPDIR/$ARCHIVE" 1; then
-    echo "Не удалось скачать архив" >&2; exit 1
+    echo "Failed to download the archive" >&2; exit 1
 fi
 
-echo "Скачиваю SHA256SUMS"
+echo "Downloading SHA256SUMS"
 if ! download_file "$SUMS_URL" "$TMPDIR/SHA256SUMS"; then
-    echo "Не удалось скачать SHA256SUMS" >&2; exit 1
+    echo "Failed to download SHA256SUMS" >&2; exit 1
 fi
 
-echo "Проверяю контрольную сумму"
+echo "Verifying the checksum"
 check_sha256 "$TMPDIR/$ARCHIVE" "$TMPDIR/SHA256SUMS" || exit 1
 
-echo "Распаковываю"
+echo "Extracting"
 BIN_PATH=$(extract_bin "$TMPDIR/$ARCHIVE" "$TMPDIR") || exit 1
 chmod +x "$BIN_PATH"
 
 EXPECTED_VER="${TAG#v}"
 ACTUAL_VER=$("$BIN_PATH" --version 2>/dev/null || true)
 if [ -n "$ACTUAL_VER" ] && [ "$ACTUAL_VER" != "$EXPECTED_VER" ]; then
-    echo "Внимание: версия бинаря ($ACTUAL_VER) не совпадает с тегом ($EXPECTED_VER)" >&2
+    echo "Warning: the binary version ($ACTUAL_VER) does not match the tag ($EXPECTED_VER)" >&2
 fi
 
 do_install "$BIN_PATH" "${ACTUAL_VER:-$EXPECTED_VER}"
