@@ -50,6 +50,22 @@ expand_tilde() {
     esac
 }
 
+normalize_git_url() {
+    case "$1" in
+        "")
+            printf 'local' ;;
+        *://*)
+            _h=${1#*://}
+            _h=${_h#*@}
+            printf 'https://%s' "${_h%.git}" ;;
+        *:*)
+            _h=${1#*@}
+            printf 'https://%s' "$(printf '%s' "${_h%.git}" | tr ':' '/')" ;;
+        *)
+            printf 'local' ;;
+    esac
+}
+
 # Writes the list of roots (one per line) into file $1
 write_roots() {
     _out="$1"
@@ -184,11 +200,12 @@ fi
 
 echo "Release workflow:"
 _wf_found=0
+WF_FILES=""
 for _f in "$REPO_DIR"/.github/workflows/*.yml "$REPO_DIR"/.github/workflows/*.yaml \
           "$REPO_DIR"/.gitea/workflows/*.yml "$REPO_DIR"/.gitea/workflows/*.yaml; do
     [ -f "$_f" ] || continue
     _wf_found=1
-    break
+    WF_FILES="$WF_FILES $_f"
 done
 if [ "$_wf_found" = "1" ]; then
     ok ".github/workflows/*.yml or .gitea/workflows/*.yml found"
@@ -212,6 +229,43 @@ if [ -d "$REPO_DIR/.git" ] && command -v git >/dev/null 2>&1; then
     fi
 else
     warn "git is unavailable - tags were not checked"
+fi
+
+# --- origin ---
+
+echo "Origin:"
+if [ -f "$REPO_DIR/upstream.txt" ]; then
+    UPSTREAM=$(tr -d '[:space:]' < "$REPO_DIR/upstream.txt")
+    if printf '%s' "$UPSTREAM" | grep -Eq '^https://[^[:space:]@]+$'; then
+        ok "upstream.txt = $UPSTREAM"
+    else
+        fail "upstream.txt must contain one canonical https URL (got: '$UPSTREAM')"
+    fi
+else
+    ok "no upstream.txt - upstream equals origin"
+fi
+
+if [ -n "$BUILD_FILE" ]; then
+    if grep -q 'main\.origin' "$BUILD_FILE" 2>/dev/null; then
+        ok "-X main.origin present in $(basename "$BUILD_FILE")"
+    else
+        warn "no -X main.origin in $(basename "$BUILD_FILE") - a local build will have no origin"
+    fi
+fi
+
+if [ "$_wf_found" = "1" ]; then
+    if grep -lq 'main\.origin' $WF_FILES 2>/dev/null; then
+        ok "-X main.origin present in the release workflow"
+    else
+        warn "no -X main.origin in the release workflow - released binaries will have no origin"
+    fi
+fi
+
+_leak_files="$WF_FILES"
+[ -n "$BUILD_FILE" ] && _leak_files="$_leak_files $BUILD_FILE"
+if [ -n "$_leak_files" ] \
+   && grep -Eq 'main\.origin=[^ "]*\$[({]?(shell +)?git remote get-url' $_leak_files 2>/dev/null; then
+    warn "'git remote get-url' is embedded into main.origin directly - normalise the URL first (see CONVENTIONS.md), otherwise credentials may leak into the binary"
 fi
 
 # --- optional build and --version check ---
@@ -239,6 +293,42 @@ if [ "$DO_BUILD" = "1" ]; then
                 fail "--version printed '$_ver', expected '$VERSION' (from versions.txt)"
             else
                 ok "--version = $_ver"
+            fi
+
+            _org=$("$BIN_PATH" --origin 2>/dev/null || true)
+            if [ -z "$_org" ]; then
+                fail "--origin printed nothing"
+            elif [ "$(printf '%s\n' "$_org" | wc -l)" -gt 1 ]; then
+                fail "--origin must print exactly one line (got $(printf '%s\n' "$_org" | wc -l))"
+            elif printf '%s' "$_org" | grep -q '@'; then
+                fail "--origin contains credentials or an ssh user: '$_org' (see CONVENTIONS.md)"
+            elif ! printf '%s' "$_org" | grep -Eq '^(https://[^[:space:]]+|local)$'; then
+                fail "--origin must be a canonical https URL or 'local' (got: '$_org')"
+            elif printf '%s' "$_org" | grep -Eq '\.git$|/$'; then
+                fail "--origin must have no .git suffix and no trailing slash (got: '$_org')"
+            else
+                ok "--origin = $_org"
+                _remote=$(cd "$REPO_DIR" && git remote get-url origin 2>/dev/null || true)
+                _remote=$(normalize_git_url "$_remote")
+                if [ "$_remote" != "local" ] && [ "$_org" != "$_remote" ]; then
+                    warn "--origin ('$_org') differs from the repository remote ('$_remote')"
+                fi
+            fi
+
+            _bi=$("$BIN_PATH" --buildinfo 2>/dev/null || true)
+            if [ -z "$_bi" ] || ! printf '%s\n' "$_bi" | grep -Eq '^[a-z]+='; then
+                warn "--buildinfo is not supported"
+            else
+                _bi_ver=$(printf '%s\n' "$_bi" | sed -n 's/^version=//p' | head -1)
+                if ! printf '%s\n' "$_bi" | grep -q '^origin='; then
+                    fail "--buildinfo has no 'origin=' line"
+                elif [ -z "$_bi_ver" ]; then
+                    fail "--buildinfo has no 'version=' line"
+                elif [ -n "$VERSION" ] && [ "$_bi_ver" != "$VERSION" ]; then
+                    fail "--buildinfo version=$_bi_ver, expected '$VERSION' (from versions.txt)"
+                else
+                    ok "--buildinfo reports origin and version=$_bi_ver"
+                fi
             fi
         fi
     else

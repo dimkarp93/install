@@ -218,13 +218,160 @@ bump-major:
 Cutting a new version: `just bump-patch` (or `bump-minor` / `bump-major`) → commit `versions.txt` →
 merge into the `main` / `master` branch. The workflow creates the tag and the release.
 
+## Origin
+
+A program can live in several repositories at once — an upstream on GitHub and one or more mirrors
+(for example, a self-hosted Gitea). By the installed executable alone it is then impossible to tell
+where it came from. To make that visible, the source repository is embedded into the executable at
+build time, next to the version.
+
+Two values are embedded:
+
+- `origin` — the repository the executable was actually built from (the mirror);
+- `upstream` — the canonical repository of the project (where issues go).
+
+For a program with no mirrors both values coincide.
+
+### 1. The `--origin` flag
+
+When started with the `--origin` flag, the executable prints to standard output a single line with
+the URL of the repository it was built from:
+
+```
+https://gitea.example.org/dima/mytool
+```
+
+Without any extra text — just the URL on its own line, in the canonical form (see item 3). If the
+executable was built from a working copy without a remote, the line is the literal `local`.
+
+### 2. The `--buildinfo` flag
+
+Everything else about the build is reported by a separate `--buildinfo` flag, as `key=value` lines
+in a fixed order:
+
+```
+origin=https://gitea.example.org/dima/mytool
+upstream=https://github.com/dimkarp93/mytool
+version=0.4.0
+commit=431b60b
+channel=gitea-release
+```
+
+The `origin`, `upstream` and `version` keys are always printed; `commit` and `channel` are omitted
+when unknown. `channel` describes how the executable was produced: `github-release`,
+`gitea-release`, `local` or `go-install`.
+
+One flag holds the whole set, so new build attributes do not require a new flag every time — only a
+new line in the output.
+
+### 3. Canonical URL form
+
+The embedded URL must be canonical: scheme `https`, no user info, no `.git` suffix, no trailing
+slash.
+
+```
+https://<host>/<owner>/<name>
+```
+
+This is a **requirement**, not a formatting preference. `git remote get-url origin` may return
+`https://user:token@host/owner/repo.git` or `git@host:owner/repo.git`; embedding such a string
+verbatim leaks a token or an internal host name into an executable that later ends up in a public
+release. The URL is therefore normalised before it is embedded: the user info is dropped and the ssh
+form is converted to https.
+
+A snippet for a `Justfile` / `Makefile` build target:
+
+```sh
+u=$(git remote get-url origin 2>/dev/null || true)
+case "$u" in
+    "")    o=local ;;
+    *://*) h=${u#*://}; h=${h#*@}; o="https://${h%.git}" ;;
+    *:*)   h=${u#*@};   o="https://$(printf '%s' "${h%.git}" | tr ':' '/')" ;;
+    *)     o=local ;;
+esac
+```
+
+The snippet keeps the port, so an ssh remote on a non-standard port (`ssh://git@host:2222/o/r`)
+yields `https://host:2222/o/r` — an ssh port is not an https port. For such a repository the origin
+is set explicitly in the build target instead of being derived from the remote.
+
+In CI no normalisation is needed: `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}` is already canonical.
+The release workflows from this repository build the value that way.
+
+### 4. The `upstream.txt` file
+
+The canonical repository is declared by an optional `upstream.txt` file in the repository root — a
+single line with the URL in the canonical form:
+
+```
+https://github.com/dimkarp93/mytool
+```
+
+If the file is absent, `upstream` equals `origin`. Adding the file makes sense in mirrors: there
+`origin` points at the mirror while `upstream` keeps pointing at the source of truth.
+
+### 5. Origin under `go install`
+
+As with the version (see the `go install` section above), a build made by `go install` carries no
+`-ldflags`, so `main.origin` stays empty. The module path is exactly the repository the module was
+fetched from, so it serves as the fallback:
+
+```go
+var (
+    version  string
+    origin   string
+    upstream string
+    commit   string
+    channel  string
+)
+
+func Origin() string {
+    if origin != "" {
+        return origin
+    }
+    if info, ok := debug.ReadBuildInfo(); ok && info.Main.Path != "" {
+        p := info.Main.Path
+        if i := strings.LastIndex(p, "/v"); i > 0 {
+            if _, err := strconv.Atoi(p[i+2:]); err == nil {
+                p = p[:i]
+            }
+        }
+        return "https://" + p
+    }
+    return "unknown"
+}
+```
+
+The major-version suffix (`/v2`, `/v3`) is stripped so that the URL points at the repository rather
+than at a module path.
+
 ## Recommendations
 
 ### Static build
 
-Build without depending on system libraries (for Go — `CGO_ENABLED=0` and
-`-trimpath -ldflags="-s -w -X main.version=<ver>"`). This guarantees that the executable runs on
-any Linux / macOS without external dependencies.
+Build without depending on system libraries (for Go — `CGO_ENABLED=0` and `-trimpath` plus the
+`-ldflags` carrying the version and the origin). This guarantees that the executable runs on any
+Linux / macOS without external dependencies.
+
+```
+-ldflags="-s -w -X main.version=${VERSION} -X main.origin=${ORIGIN} -X main.upstream=${UPSTREAM} -X main.commit=${COMMIT} -X main.channel=${CHANNEL}"
+```
+
+### Origin is not a trust anchor
+
+The origin is self-declared: a rebuild can claim any URL, and nothing in the executable proves the
+claim. The value is meant for diagnostics — "which mirror does this binary come from" — and must not
+be used to make trust decisions.
+
+In particular, an updater must never fetch code or releases from a URL taken out of an executable
+without checking it against a host allowlist configured by the user.
+
+### Embedding the origin breaks bit-for-bit reproducibility
+
+Two builds of the same commit made in different mirrors produce different executables, because the
+embedded `origin` differs. The `SHA256SUMS` files of releases published by different mirrors
+therefore cannot be compared with each other. Each mirror is a release channel of its own; compare
+checksums only within one channel.
 
 ### Idempotent CI release
 

@@ -364,7 +364,9 @@ installation needs:
 
 `check_install.sh` verifies that a repository follows [CONVENTIONS.en.md](CONVENTIONS.en.md):
 the presence of `.git`, a valid `versions.txt`, the executable name (from the directory name),
-the build target, the `bump-*` targets, the release workflow and the git tag format. The arguments
+the build target, the `bump-*` targets, the release workflow, the git tag format and the origin
+(a valid `upstream.txt` if present, and `-X main.origin` in the build target and in the release
+workflow). The arguments
 are the same as for `local_install.sh` (the default path is the current directory, a relative path
 is looked up in the roots from `~/.config/install/roots.txt`).
 
@@ -374,12 +376,17 @@ check_install.sh myapp           # by name (looked up in the roots)
 check_install.sh ~/dev/myapp     # by absolute path
 ```
 
-The `--build` flag additionally builds the executable and checks that `--version` prints the
-version from `versions.txt`:
+The `--build` flag additionally builds the executable and checks its output: that `--version` prints
+the version from `versions.txt`, and that `--origin` prints one canonical URL (or `local`) with no
+credentials in it:
 
 ```sh
 check_install.sh --build myapp
 ```
+
+The origin checks are `[WARN]` without `--build` — the migration of the existing tools is not
+finished yet, so a missing `-X main.origin` does not fail the check. With `--build` a broken or
+missing `--origin` is a `[FAIL]`.
 
 Every check is marked `[OK]` / `[WARN]` / `[FAIL]`. Exit code `0` means all required checks passed,
 `1` means there are errors (warnings do not affect the exit code).
@@ -399,6 +406,27 @@ To update only when a newer version is available:
 github_install.sh -u owner/repo
 ```
 
+### Which mirror is this binary from
+
+The same program can be installed from an upstream on GitHub or from a mirror in Gitea. The
+installed executable reports the repository it was built from itself:
+
+```sh
+$ mytool --origin
+https://gitea.example.org/dima/mytool
+
+$ mytool --buildinfo
+origin=https://gitea.example.org/dima/mytool
+upstream=https://github.com/dimkarp93/mytool
+version=0.4.0
+commit=431b60b
+channel=gitea-release
+```
+
+The value is self-declared and is meant for diagnostics — it does not prove where the executable
+really came from and must not be used as a basis for trust. See the "Origin" section of
+[CONVENTIONS.en.md](CONVENTIONS.en.md).
+
 ## Requirements for programs
 
 To be installable with the installers from this repository, a program must:
@@ -413,6 +441,9 @@ To be installable with the installers from this repository, a program must:
    `<name>-<os>-<arch>/` directory).
 7. **Print the version in semver format** for `--version` (just the `0.4.0` string, with no spaces
    or extra text).
+8. **Print the source repository** for `--origin` — a single line with the canonical URL of the
+   repository the executable was built from — and the rest of the build attributes for
+   `--buildinfo`, as `key=value` lines.
 
 The full description of the requirements is in [CONVENTIONS.en.md](CONVENTIONS.en.md).
 
