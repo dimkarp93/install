@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          auth=$(printf '%s:' "$TOKEN" | base64 | tr -d '\n')
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git config --local "http.extraheader" "Authorization: Basic ${auth}"
+          git fetch -q --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+
+      - name: Read version
+        id: ver
+        run: |
+          set -eu
+          if [ ! -f versions.txt ]; then
+            echo "versions.txt not found" >&2
+            exit 1
+          fi
+          v=$(tr -d '[:space:]' < versions.txt)
+          if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "versions.txt must contain semver X.Y.Z (got: '$v')" >&2
+            exit 1
+          fi
+          bin="${GITHUB_REPOSITORY##*/}"
+          if [ -f "${bin}.sh" ]; then
+            src="${bin}.sh"
+          elif [ -f "${bin}-init.sh" ]; then
+            src="${bin}-init.sh"
+          else
+            echo "source script not found: ${bin}.sh or ${bin}-init.sh" >&2
+            exit 1
+          fi
+          origin="${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
+          if [ -f upstream.txt ]; then
+            upstream=$(tr -d '[:space:]' < upstream.txt)
+          else
+            upstream="$origin"
+          fi
+          echo "version=$v"          >> "$GITHUB_OUTPUT"
+          echo "tag=v$v"             >> "$GITHUB_OUTPUT"
+          echo "bin=$bin"            >> "$GITHUB_OUTPUT"
+          echo "src=$src"            >> "$GITHUB_OUTPUT"
+          echo "origin=$origin"      >> "$GITHUB_OUTPUT"
+          echo "upstream=$upstream"  >> "$GITHUB_OUTPUT"
+          echo "commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag existence
+        id: tagcheck
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -eu
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists - skipping the release"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the script
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: sh -n "${{ steps.ver.outputs.src }}"
+
+      - name: Build archives
+        if: steps.tagcheck.outputs.exists == 'false'
+        env:
+          BIN: ${{ steps.ver.outputs.bin }}
+          SRC: ${{ steps.ver.outputs.src }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          ORIGIN: ${{ steps.ver.outputs.origin }}
+          UPSTREAM: ${{ steps.ver.outputs.upstream }}
+          COMMIT: ${{ steps.ver.outputs.commit }}
+          CHANNEL: gitea-release
+        run: |
+          set -eu
+          mkdir -p dist
+          build=$(mktemp -d)
+          sed -e "s|^VERSION=\"dev\"$|VERSION=\"${VERSION}\"|" \
+              -e "s|^ORIGIN=\"\"$|ORIGIN=\"${ORIGIN}\"|" \
+              -e "s|^UPSTREAM=\"\"$|UPSTREAM=\"${UPSTREAM}\"|" \
+              -e "s|^COMMIT=\"\"$|COMMIT=\"${COMMIT}\"|" \
+              -e "s|^CHANNEL=\"\"$|CHANNEL=\"${CHANNEL}\"|" \
+              "$SRC" > "$build/${BIN}"
+          chmod +x "$build/${BIN}"
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            tar -C "$build" -czf "dist/${BIN}-${os}-${arch}.tar.gz" "${BIN}"
+          done
+          rm -rf "$build"
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+          ls -la dist
+
+      - name: Create release
+        if: steps.tagcheck.outputs.exists == 'false'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -eu
+          api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          body=$(printf '{"tag_name":"%s","target_commitish":"%s","name":"%s","body":"Automated release %s from versions.txt"}' \
+            "$TAG" "$GITHUB_SHA" "$TAG" "$TAG")
+          resp=$(curl -fsS -X POST "${api}/releases" \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$body")
+          if command -v jq >/dev/null 2>&1; then
+            id=$(printf '%s' "$resp" | jq -r '.id')
+          else
+            id=$(printf '%s' "$resp" | grep -o '"id":[[:space:]]*[0-9]*' | head -n1 | tr -dc '0-9')
+          fi
+          if [ -z "$id" ]; then
+            echo "failed to get the release id from the Gitea response: $resp" >&2
+            exit 1
+          fi
+          for f in dist/*; do
+            echo "Uploading $(basename "$f")"
+            curl -fsS -X POST "${api}/releases/${id}/assets?name=$(basename "$f")" \
+              -H "Authorization: token ${TOKEN}" \
+              -F "attachment=@${f}" >/dev/null
+          done
+          echo "Release ${TAG} created"

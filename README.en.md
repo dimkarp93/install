@@ -12,8 +12,8 @@ have Go installed.
 ## Installing the installers into PATH
 
 To avoid typing a long `curl` command every time, install the installers
-(`github_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh` and
-`check_install.sh`) into PATH once:
+(`github_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh`,
+`check_install.sh` and `init_install.sh`) into PATH once:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/bootstrap.sh | sh
@@ -360,19 +360,84 @@ installation needs:
   repository root.
 - **The executable name**: matches the directory name.
 
+## Creating a new program (`init_install.sh`)
+
+`init_install.sh` creates a repository that already follows
+[CONVENTIONS.en.md](CONVENTIONS.en.md) — one command instead of copying the templates by hand:
+
+```sh
+init_install.sh --lang go --owner dimkarp93 mytool   # ./mytool in the current directory
+init_install.sh --lang sh ~/dev/mytool               # by absolute path
+```
+
+What ends up in the repository:
+
+| File | Purpose |
+|---|---|
+| `versions.txt` | `0.1.0` — the source of truth for the version |
+| `justfile` | `build`, `check`, `bump-patch/minor/major`, `release`, `install`, `clean` |
+| `.gitignore` | the executable built in the root, `dist/` |
+| `cmd/<name>/main.go` or `<name>.sh` | the skeleton with `--version` / `--origin` / `--buildinfo` |
+| `go.mod` | `module <host>/<owner>/<name>` (for `--lang go`) |
+| `.github/workflows/release.yml` | the release workflow (`--ci gitea` or `--ci both` add the Gitea one) |
+| `README.md` | how to install, build and release |
+
+For `--lang go` the skeleton uses
+[`install-libs/buildinfo`](https://github.com/dimkarp93/install-libs), so the three flags are
+implemented by the library rather than by hand; `init_install.sh` fetches the dependency itself.
+For `--lang sh` the `VERSION` / `ORIGIN` / `UPSTREAM` / `COMMIT` / `CHANNEL` values are substituted
+into the script by the `build` recipe and by the workflow.
+
+The flags:
+
+```
+--lang go|sh                  language of the skeleton (default: go)
+--owner OWNER                 repository owner (required for --lang go)
+--host HOST                   repository host (default: github.com)
+--upstream URL                write upstream.txt (for mirrors)
+--layout cmd|root             go: cmd/<name>/main.go (default) or main.go in the root
+--ci github|gitea|both|none   which release workflow to add (default: github)
+--remote URL                  git remote add origin URL
+--no-git                      do not run git init and do not create the first commit
+--force                       fill an existing directory (existing files are kept)
+--emit TEMPLATE               print a template to stdout and exit
+
+<name|path>                   an absolute path, or a name or relative path -
+                              resolved against the current directory
+```
+
+No existing file is ever overwritten: a file that is already there is reported as `[skip]`. That
+makes it safe to run the command over a half-finished repository with `--force`. At the end
+`init_install.sh` runs `check_install.sh` over the result, so the output immediately shows whether
+the repository conforms.
+
+Releasing the program afterwards is one command too:
+
+```sh
+just release patch    # bump versions.txt -> commit -> push; the tag and the release are made by the workflow
+```
+
+`--emit` prints a template without creating anything — it is the single source of the templates:
+the files in `workflows/` are generated from it (`just sync-workflows`), and `check_install.sh
+--fix` takes what it adds from the same place.
+
 ## Checking conformance to the conventions (`check_install.sh`)
 
 `check_install.sh` verifies that a repository follows [CONVENTIONS.en.md](CONVENTIONS.en.md):
 the presence of `.git`, a valid `versions.txt`, the executable name (from the directory name),
-the build target, the `bump-*` targets, the release workflow, the git tag format and the origin
-(a valid `upstream.txt` if present, and `-X main.origin` in the build target and in the release
-workflow). The arguments
-are the same as for `local_install.sh` (the default path is the current directory, a relative path
-is looked up in the roots from `~/.config/install/roots.txt`).
+the build target, the `bump-*` targets, the release workflow (including `SHA256SUMS` and the
+per-platform archives), the git tag format, `versions.txt` against the latest tag, the executable
+in `.gitignore` and the origin (a valid `upstream.txt` if present, and the origin embedded by the
+build target and by the release workflow). If there is a `go.mod`, the requirements of the
+`go install` section are checked as well: a network module path, its last segment against the
+binary name, the `/vN` suffix for major versions from `2.0.0` on, the absence of `replace` and the
+location of `package main`. The argument is a path to the repository: an absolute path, or a name
+or relative path resolved against the current directory. If no path is given, the current directory
+is used.
 
 ```sh
 check_install.sh                 # current directory
-check_install.sh myapp           # by name (looked up in the roots)
+check_install.sh myapp           # ./myapp in the current directory
 check_install.sh ~/dev/myapp     # by absolute path
 ```
 
@@ -390,6 +455,28 @@ missing `--origin` is a `[FAIL]`.
 
 Every check is marked `[OK]` / `[WARN]` / `[FAIL]`. Exit code `0` means all required checks passed,
 `1` means there are errors (warnings do not affect the exit code).
+
+### Fixing what is missing (`--fix`)
+
+The `--fix` flag creates the missing pieces before checking, and only them — nothing that is
+already in the repository is overwritten, so the flag is idempotent:
+
+```sh
+check_install.sh --fix myapp
+```
+
+- no `versions.txt` → created with `0.1.0`;
+- no `.gitignore`, or no executable in it → created or extended with `/<name>` and `/dist/`;
+- no `bump-*` recipes in the `justfile` → appended to the end;
+- no release workflow at all → `.github/workflows/release.yml` is added (the Go or the shell
+  variant, depending on whether there is a `go.mod`).
+
+A `Makefile` is not edited automatically: the syntax of the targets differs, so `--fix` only says
+that the `bump-*` targets have to be added by hand (there is a ready block in
+[CONVENTIONS.en.md](CONVENTIONS.en.md)).
+
+The templates come from `init_install.sh --emit`, so `--fix` needs `init_install.sh` in PATH or
+next to `check_install.sh`; both are installed by `bootstrap.sh`.
 
 ## Updating
 
@@ -449,14 +536,23 @@ The full description of the requirements is in [CONVENTIONS.en.md](CONVENTIONS.e
 
 ## Using the CI release template
 
-The `workflows/` directory holds two equivalent templates — pick one by platform:
+The `workflows/` directory holds four equivalent templates — pick one by platform and by the
+language of the program (`init_install.sh` puts the right one in place by itself):
 
-| Platform | Template | Where to copy it |
-|---|---|---|
-| GitHub Actions | `workflows/release.yml` | `.github/workflows/release.yml` |
-| Gitea Actions | `workflows/release-gitea.yml` | `.gitea/workflows/release.yml` |
+| Platform | Go | POSIX shell | Where to copy it |
+|---|---|---|---|
+| GitHub Actions | `workflows/release.yml` | `workflows/release-sh.yml` | `.github/workflows/release.yml` |
+| Gitea Actions | `workflows/release-gitea.yml` | `workflows/release-sh-gitea.yml` | `.gitea/workflows/release.yml` |
 
-Both workflows do the same thing:
+The shell templates build the executable by substituting the version and the origin into
+`<name>.sh` (or `<name>-init.sh`) with `sed` instead of calling `go build`, and they check the
+source with `sh -n`; everything else — the archive names, `SHA256SUMS`, the tag, the idempotency —
+is identical.
+
+The files in `workflows/` are generated from the templates embedded into `init_install.sh`:
+`just sync-workflows` refreshes them, `just check` fails if they have drifted apart.
+
+All the workflows do the same thing:
 
 - read the version from `versions.txt`,
 - derive the executable name from the repository name,

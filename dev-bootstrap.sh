@@ -5,7 +5,7 @@ set -eu
 # working copy of this repository (next to this script) instead of GitHub.
 # Handy while editing the installers: edit -> dev-bootstrap.sh -> check in PATH.
 
-SCRIPTS="github_install.sh gitea_install.sh local_install.sh go_install.sh check_install.sh"
+SCRIPTS="github_install.sh gitea_install.sh local_install.sh go_install.sh check_install.sh init_install.sh"
 
 usage() {
     cat <<EOF

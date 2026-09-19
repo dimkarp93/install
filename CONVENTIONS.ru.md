@@ -394,3 +394,21 @@ Workflow должен проверять существование тега и 
 использует внешних actions (checkout, установка Go и публикация релиза — шаги `run:` на shell,
 релиз создаётся через Gitea API), поэтому работает и там, где раннер не может скачивать actions
 с github.com.
+
+### Создание и проверка
+
+Репозиторий, удовлетворяющий всему описанному выше, создаётся `init_install.sh` из этого
+репозитория:
+
+```sh
+init_install.sh --lang go --owner <owner> <name>
+init_install.sh --lang sh <name>
+```
+
+Он пишет `versions.txt`, `justfile` с рецептами `build` / `bump-*` / `release`, `.gitignore`,
+workflow релиза и скелет с `--version` / `--origin` / `--buildinfo` (для Go — через
+`install-libs/buildinfo`).
+
+Существующий репозиторий проверяется `check_install.sh` (с `--build` он ещё и собирает бинарь и
+смотрит вывод флагов), а `check_install.sh --fix` дописывает недостающее: `versions.txt`,
+`.gitignore`, рецепты `bump-*` и workflow релиза.

@@ -11,8 +11,8 @@
 ## Установка установщиков в PATH
 
 Чтобы не вводить длинную команду `curl` каждый раз, установите установщики
-(`github_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh` и
-`check_install.sh`) в PATH один раз:
+(`github_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh`,
+`check_install.sh` и `init_install.sh`) в PATH один раз:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/bootstrap.sh | sh
@@ -358,18 +358,83 @@ local_install.sh --user-only myapp
   в корень репозитория.
 - **Имя исполняемого файла**: совпадает с именем каталога.
 
+## Создание новой программы (`init_install.sh`)
+
+`init_install.sh` создаёт репозиторий, который сразу соответствует
+[CONVENTIONS.ru.md](CONVENTIONS.ru.md), — одна команда вместо ручного копирования шаблонов:
+
+```sh
+init_install.sh --lang go --owner dimkarp93 mytool   # ./mytool в текущем каталоге
+init_install.sh --lang sh ~/dev/mytool               # по абсолютному пути
+```
+
+Что оказывается в репозитории:
+
+| Файл | Назначение |
+|---|---|
+| `versions.txt` | `0.1.0` — источник истины для версии |
+| `justfile` | `build`, `check`, `bump-patch/minor/major`, `release`, `install`, `clean` |
+| `.gitignore` | собранный в корне исполняемый файл, `dist/` |
+| `cmd/<name>/main.go` или `<name>.sh` | скелет с `--version` / `--origin` / `--buildinfo` |
+| `go.mod` | `module <host>/<owner>/<name>` (для `--lang go`) |
+| `.github/workflows/release.yml` | workflow релиза (`--ci gitea` или `--ci both` добавят Gitea-вариант) |
+| `README.md` | как установить, собрать и выпустить |
+
+Для `--lang go` скелет использует
+[`install-libs/buildinfo`](https://github.com/dimkarp93/install-libs), то есть три флага
+реализует библиотека, а не ручной код; зависимость `init_install.sh` подтягивает сам.
+Для `--lang sh` значения `VERSION` / `ORIGIN` / `UPSTREAM` / `COMMIT` / `CHANNEL` подставляются в
+скрипт рецептом `build` и workflow.
+
+Флаги:
+
+```
+--lang go|sh                  язык скелета (по умолчанию go)
+--owner OWNER                 владелец репозитория (обязателен для --lang go)
+--host HOST                   хост репозитория (по умолчанию github.com)
+--upstream URL                записать upstream.txt (для зеркал)
+--layout cmd|root             go: cmd/<name>/main.go (по умолчанию) или main.go в корне
+--ci github|gitea|both|none   какой workflow релиза положить (по умолчанию github)
+--remote URL                  git remote add origin URL
+--no-git                      не делать git init и первый коммит
+--force                       достроить существующий каталог (существующие файлы сохраняются)
+--emit TEMPLATE               напечатать шаблон в stdout и выйти
+
+<name|path>                   абсолютный путь либо имя или относительный путь -
+                              разрешается относительно текущего каталога
+```
+
+Ни один существующий файл не перезаписывается: уже имеющийся файл отмечается как `[skip]`. Поэтому
+команду безопасно запускать с `--force` поверх наполовину готового репозитория. В конце
+`init_install.sh` прогоняет по результату `check_install.sh`, так что из вывода сразу видно,
+соответствует ли репозиторий конвенциям.
+
+Выпуск программы дальше — тоже одна команда:
+
+```sh
+just release patch    # bump versions.txt -> коммит -> push; тег и релиз делает workflow
+```
+
+`--emit` печатает шаблон, ничего не создавая, — это единственный источник шаблонов: из него
+генерируются файлы в `workflows/` (`just sync-workflows`), оттуда же берёт заготовки
+`check_install.sh --fix`.
+
 ## Проверка соответствия конвенциям (`check_install.sh`)
 
 `check_install.sh` проверяет, что репозиторий соответствует [CONVENTIONS.ru.md](CONVENTIONS.ru.md):
 наличие `.git`, корректный `versions.txt`, имя исполняемого файла (из имени каталога),
-цель сборки, цели `bump-*`, workflow релиза, формат git-тегов и источник сборки (корректный
-`upstream.txt`, если он есть, и `-X main.origin` в цели сборки и в workflow релиза). Аргументы — те
-же, что у `local_install.sh` (путь по умолчанию — текущий каталог, относительный путь
-ищется по корням из `~/.config/install/roots.txt`).
+цель сборки, цели `bump-*`, workflow релиза (включая `SHA256SUMS` и архивы по платформам), формат
+git-тегов, `versions.txt` относительно последнего тега, исполняемый файл в `.gitignore` и источник
+сборки (корректный `upstream.txt`, если он есть, и подстановку origin в цели сборки и в workflow
+релиза). Если есть `go.mod`, дополнительно проверяются требования раздела про `go install`:
+сетевой путь модуля, его последний сегмент против имени бинаря, суффикс `/vN` для мажорных версий
+от `2.0.0`, отсутствие `replace` и расположение `package main`. Аргумент — путь к репозиторию:
+абсолютный путь либо имя или относительный путь, который разрешается относительно текущего
+каталога. Если путь не указан, берётся текущий каталог.
 
 ```sh
 check_install.sh                 # текущий каталог
-check_install.sh myapp           # по имени (ищется в корнях)
+check_install.sh myapp           # ./myapp в текущем каталоге
 check_install.sh ~/dev/myapp     # по абсолютному пути
 ```
 
@@ -382,11 +447,34 @@ check_install.sh --build myapp
 ```
 
 Без `--build` проверки источника сборки дают `[WARN]`: миграция существующих инструментов ещё не
-закончена, поэтому отсутствие `-X main.origin` не роняет проверку. С `--build` сломанный или
+закончена, поэтому отсутствие подстановки origin не роняет проверку. С `--build` сломанный или
 отсутствующий `--origin` — это `[FAIL]`.
 
 Каждая проверка помечается `[OK]` / `[WARN]` / `[FAIL]`. Код выхода `0` — все обязательные
 требования выполнены, `1` — есть ошибки (предупреждения на код выхода не влияют).
+
+### Починка недостающего (`--fix`)
+
+Флаг `--fix` создаёт недостающее перед проверкой — и только недостающее: ничего из того, что уже
+есть в репозитории, не перезаписывается, поэтому флаг идемпотентен:
+
+```sh
+check_install.sh --fix myapp
+```
+
+- нет `versions.txt` → создаётся с `0.1.0`;
+- нет `.gitignore` или в нём нет исполняемого файла → создаётся или дополняется строками `/<name>`
+  и `/dist/`;
+- нет рецептов `bump-*` в `justfile` → дописываются в конец;
+- нет ни одного workflow релиза → добавляется `.github/workflows/release.yml` (Go- или
+  shell-вариант, в зависимости от наличия `go.mod`).
+
+`Makefile` автоматически не правится: синтаксис целей отличается, поэтому `--fix` только сообщает,
+что цели `bump-*` нужно добавить руками (готовый блок есть в
+[CONVENTIONS.ru.md](CONVENTIONS.ru.md)).
+
+Шаблоны берутся из `init_install.sh --emit`, поэтому для `--fix` нужен `init_install.sh` в PATH
+или рядом с `check_install.sh`; оба ставит `bootstrap.sh`.
 
 ## Обновление
 
@@ -446,14 +534,22 @@ channel=gitea-release
 
 ## Использование шаблона CI-релиза
 
-В каталоге `workflows/` лежат два равнозначных шаблона — выберите по платформе:
+В каталоге `workflows/` лежат четыре равнозначных шаблона — выберите по платформе и языку
+программы (`init_install.sh` кладёт нужный сам):
 
-| Платформа | Шаблон | Куда копировать |
-|---|---|---|
-| GitHub Actions | `workflows/release.yml` | `.github/workflows/release.yml` |
-| Gitea Actions | `workflows/release-gitea.yml` | `.gitea/workflows/release.yml` |
+| Платформа | Go | POSIX shell | Куда копировать |
+|---|---|---|---|
+| GitHub Actions | `workflows/release.yml` | `workflows/release-sh.yml` | `.github/workflows/release.yml` |
+| Gitea Actions | `workflows/release-gitea.yml` | `workflows/release-sh-gitea.yml` | `.gitea/workflows/release.yml` |
 
-Оба workflow делают одно и то же:
+Shell-шаблоны собирают исполняемый файл подстановкой версии и origin в `<name>.sh` (или
+`<name>-init.sh`) через `sed` вместо `go build` и проверяют исходник через `sh -n`; всё
+остальное — имена архивов, `SHA256SUMS`, тег, идемпотентность — идентично.
+
+Файлы в `workflows/` генерируются из шаблонов, встроенных в `init_install.sh`:
+`just sync-workflows` обновляет их, `just check` падает, если они разъехались.
+
+Все workflow делают одно и то же:
 
 - читают версию из `versions.txt`,
 - определяют имя исполняемого файла из имени репозитория,

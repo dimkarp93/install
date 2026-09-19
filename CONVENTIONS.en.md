@@ -392,3 +392,21 @@ identical, so a release from either platform is installed by the very same `gith
 Gitea template uses no external actions (checkout, installing Go and publishing the release are
 shell `run:` steps, the release is created through the Gitea API), so it also works where the
 runner cannot download actions from github.com.
+
+### Scaffolding and checking
+
+A repository that satisfies everything described above is created by `init_install.sh` from this
+repository:
+
+```sh
+init_install.sh --lang go --owner <owner> <name>
+init_install.sh --lang sh <name>
+```
+
+It writes `versions.txt`, the `justfile` with the `build` / `bump-*` / `release` recipes,
+`.gitignore`, the release workflow and a skeleton with `--version` / `--origin` / `--buildinfo`
+(for Go — through `install-libs/buildinfo`).
+
+An existing repository is checked by `check_install.sh` (with `--build` it also builds the binary
+and inspects the output of the flags), and `check_install.sh --fix` adds the missing pieces:
+`versions.txt`, `.gitignore`, the `bump-*` recipes and the release workflow.
