@@ -179,17 +179,22 @@ func Version() string {
 
 Для повышения версии репозиторий предоставляет в `Justfile` (или `Makefile`) цели
 `bump-patch`, `bump-minor`, `bump-major`. Каждая из них увеличивает соответствующую
-компоненту версии в `versions.txt` (обнуляя младшие компоненты) — по аналогии с
-инструментами выпуска релиза (см. стиль `Justfile` инструмента `jira`):
+компоненту версии в `versions.txt` (обнуляя младшие компоненты):
 
 - `bump-patch`: `1.2.3` → `1.2.4`
 - `bump-minor`: `1.2.3` → `1.3.0`
 - `bump-major`: `1.2.3` → `2.0.0`
 
+и сразу публикует её:
+
+1. коммитит только `versions.txt` с сообщением `bump <patch|minor|major>`;
+2. ставит тег `vX.Y.Z` (если такой тег уже есть — отказывается и возвращает `versions.txt`);
+3. выполняет `git push <remote> HEAD --tags` для каждого remote из `git remote`.
+
 Пример целей для `Justfile`:
 
 ```just
-bump-patch:
+bump-patch: && (_bump-commit "patch")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -199,7 +204,7 @@ bump-patch:
     printf '%s.%s.%s\n' "$MAJ" "$MIN" "$((PAT + 1))" > versions.txt
     cat versions.txt
 
-bump-minor:
+bump-minor: && (_bump-commit "minor")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -209,7 +214,7 @@ bump-minor:
     printf '%s.%s.0\n' "$MAJ" "$((MIN + 1))" > versions.txt
     cat versions.txt
 
-bump-major:
+bump-major: && (_bump-commit "major")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -218,10 +223,50 @@ bump-major:
     EOF
     printf '%s.0.0\n' "$((MAJ + 1))" > versions.txt
     cat versions.txt
+
+_bump-commit level:
+    #!/usr/bin/env sh
+    set -eu
+    v=$(tr -d '[:space:]' < versions.txt)
+    if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+        git checkout -- versions.txt
+        echo "tag v$v already exists" >&2
+        exit 1
+    fi
+    git commit -q -m "bump {{level}}" -- versions.txt
+    git tag "v$v"
+    rc=0
+    for r in $(git remote); do
+        git push -q "$r" HEAD --tags || { echo "push to $r failed" >&2; rc=1; }
+    done
+    echo "Tagged v$v"
+    exit "$rc"
 ```
 
-Выпуск новой версии: `just bump-patch` (или `bump-minor` / `bump-major`) → зафиксировать
-`versions.txt` → влить в ветку `main` / `master`. Workflow создаст тег и релиз.
+В `Makefile` те же шаги живут во вспомогательной цели, которую вызывает каждая `bump-*`:
+
+```make
+bump-patch:
+	@v=$$(tr -d '[:space:]' < versions.txt); \
+	MAJ=$${v%%.*}; rest=$${v#*.}; MIN=$${rest%%.*}; PAT=$${rest##*.}; \
+	printf '%s.%s.%s\n' "$$MAJ" "$$MIN" "$$((PAT + 1))" > versions.txt; \
+	cat versions.txt
+	@$(MAKE) --no-print-directory _bump-commit LEVEL=patch
+
+_bump-commit:
+	@v=$$(tr -d '[:space:]' < versions.txt); \
+	if git rev-parse -q --verify "refs/tags/v$$v" >/dev/null; then \
+		git checkout -- versions.txt; echo "tag v$$v already exists" >&2; exit 1; \
+	fi; \
+	git commit -q -m "bump $(LEVEL)" -- versions.txt && git tag "v$$v" || exit 1; \
+	rc=0; for r in $$(git remote); do \
+		git push -q "$$r" HEAD --tags || { echo "push to $$r failed" >&2; rc=1; }; \
+	done; \
+	echo "Tagged v$$v"; exit $$rc
+```
+
+Выпуск новой версии — одна команда: `just bump-patch` / `make bump-patch` (или `bump-minor` /
+`bump-major`) в `main` / `master`. Запушенный тег запускает workflow релиза.
 
 ## Источник сборки
 
@@ -427,11 +472,12 @@ Origin объявлен самой программой: пересборка м
 между собой. Каждое зеркало — самостоятельный канал релизов; сверять контрольные суммы имеет смысл
 только внутри одного канала.
 
-### Идемпотентный CI-релиз
+### Релиз запускается тегом
 
-Если релиз для тега уже существует, workflow пропускает сборку. Это делает повторную отправку в
-`master` безопасной и подходит для платформ, где тег приходит синхронизацией зеркала. GitHub- и
-Gitea-шаблоны проверяют тег, GitLab-шаблон — релиз.
+Workflow релиза срабатывает на push тега `v*` (GitHub / Gitea — `on.push.tags`, GitLab —
+`$CI_COMMIT_TAG`), а не на push в ветку. Версия берётся из имени тега, поэтому workflow не читает
+`versions.txt` и не создаёт тегов: тег ставят и пушат рецепты `bump-*`. Обычный push в `master`
+релиз не запускает.
 
 ### Release-workflow запускается только на своём публичном домене
 
@@ -446,7 +492,7 @@ jobs:
 # .gitlab-ci.yml
 release:
   rules:
-    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
 ```
 
 В зеркалах на других инстансах (приватный GitHub Enterprise, внутренний GitLab, Gitea, читающая
@@ -458,7 +504,7 @@ release:
 
 Используйте шаблон из этого репозитория — он уже реализует все конвенции: вычисление имени
 исполняемого файла (из имени репозитория), сборку для четырёх платформ, генерацию
-`SHA256SUMS`, идемпотентность.
+`SHA256SUMS`, запуск по тегу `vX.Y.Z`.
 
 - GitHub Actions: `workflows/release.yml` → `.github/workflows/release.yml`
 - GitLab CI: `workflows/release-gitlab.yml` → `.gitlab-ci.yml`
@@ -468,8 +514,7 @@ release:
 
 Шаблоны взаимозаменяемы: имена архивов, `SHA256SUMS` и формат тега `vX.Y.Z` совпадают, так что
 установщики всех платформ работают одинаково. GitLab-шаблон загружает архивы в generic package
-registry проекта и прикладывает их к релизу ссылками (release links, а не attachments); на push в
-основную ветку он создаёт релиз и, если тег ещё не пришёл из зеркала, — тег. Gitea-шаблон не
+registry проекта и прикладывает их к релизу ссылками (release links, а не attachments). Gitea-шаблон не
 использует внешних actions (checkout, установка Go и публикация релиза — шаги `run:` на shell,
 релиз создаётся через Gitea API), поэтому работает и там, где раннер не может скачивать actions
 с github.com.

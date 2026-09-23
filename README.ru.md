@@ -466,7 +466,7 @@ init_install.sh --lang sh ~/dev/mytool               # по абсолютном
 Выпуск программы дальше — тоже одна команда:
 
 ```sh
-just release patch    # bump versions.txt -> коммит -> push; тег и релиз делает workflow
+just release patch    # bump versions.txt -> коммит -> тег vX.Y.Z -> push HEAD --tags во все remote; тег запускает релиз
 ```
 
 `--emit` печатает шаблон, ничего не создавая, — это единственный источник шаблонов: из него
@@ -612,19 +612,18 @@ channel=gitea-release
 
 Shell-шаблоны собирают исполняемый файл подстановкой версии и origin в `<name>.sh` (или
 `<name>-init.sh`) через `sed` вместо `go build` и проверяют исходник через `sh -n`; всё
-остальное — имена архивов, `SHA256SUMS`, тег, идемпотентность — идентично.
+остальное — имена архивов, `SHA256SUMS`, запуск по тегу — идентично.
 
 Файлы в `workflows/` генерируются из шаблонов, встроенных в `init_install.sh`:
 `just sync-workflows` обновляет их, `just check` падает, если они разъехались.
 
 Все workflow делают одно и то же:
 
-- читают версию из `versions.txt`,
+- запускаются на push тега `v*` и берут версию из имени тега (`versions.txt` не читается),
 - определяют имя исполняемого файла из имени репозитория,
 - собирают статические исполняемые файлы для четырёх платформ,
 - генерируют `SHA256SUMS`,
-- создают релиз с тегом `vX.Y.Z`,
-- пропускают сборку, если тег (в GitLab — релиз) уже существует (идемпотентно),
+- создают релиз для запушенного тега `vX.Y.Z` (сам тег ставят рецепты `bump-*`),
 - проверяют, что `go mod vendor` ничего не меняет (`git status` по `go.mod`, `go.sum`, `vendor/`);
   сборка идёт с `GOWORK=off` и `GOFLAGS=-mod=vendor`, то есть только из `vendor/`.
 
@@ -637,9 +636,9 @@ GitLab-шаблон — только на `gitlab.com` (`$CI_SERVER_HOST == "git
 [Установка из Gitea](#установка-из-gitea-gitea_installsh)); отличаются они только адресами API и
 загрузки, набор флагов один и тот же.
 
-Выпуск новой версии: повысить версию (`just bump-patch` / `bump-minor` / `bump-major` —
-см. [CONVENTIONS.ru.md](CONVENTIONS.ru.md)), зафиксировать `versions.txt` и влить в ветку
-`main` / `master`.
+Выпуск новой версии: `just bump-patch` / `make bump-patch` (или `bump-minor` / `bump-major`) в
+`main` / `master`. Рецепт коммитит `versions.txt`, ставит тег `vX.Y.Z` и пушит ветку с тегами во
+все remote — см. [CONVENTIONS.ru.md](CONVENTIONS.ru.md).
 
 ### Особенности Gitea-шаблона
 
@@ -648,13 +647,13 @@ GitLab-шаблон — только на `gitlab.com` (`$CI_SERVER_HOST == "git
 API через `curl`. Это нужно потому, что Gitea тянет actions с github.com, и в закрытом
 контуре они недоступны. Что это значит на практике:
 
-- **Checkout** — `git init` + shallow-fetch коммита `$GITHUB_SHA` из `$GITHUB_SERVER_URL`.
+- **Checkout** — `git init` + shallow-fetch помеченного тегом коммита `$GITHUB_SHA` из
+  `$GITHUB_SERVER_URL`.
 - **Go** — версия читается из `go.mod` (директива `toolchain`, иначе `go`); если указана
   только `X.Y`, точный патч резолвится через `https://go.dev/dl/?mode=json`. Тарбол ставится
   в `$HOME/.local/go` (root не нужен). Раннеру требуется доступ к `go.dev`.
-- **Релиз** — `POST /api/v1/repos/{owner}/{repo}/releases`: Gitea сама создаёт тег из
-  `target_commitish`, отдельный `git push --tags` не нужен. Затем архивы и `SHA256SUMS`
-  загружаются как assets.
+- **Релиз** — `POST /api/v1/repos/{owner}/{repo}/releases` для уже запушенного тега. Затем
+  архивы и `SHA256SUMS` загружаются как assets.
 - **Токен** — `secrets.GITHUB_TOKEN`, который Gitea выдаёт каждому job автоматически;
   заводить секрет вручную не нужно. Если API отвечает `403`, включите запись для токена
   Actions в настройках репозитория или подставьте свой токен с правом `write:repository`.
@@ -665,14 +664,12 @@ API через `curl`. Это нужно потому, что Gitea тянет a
 
 `workflows/release-gitlab.yml` (→ `.gitlab-ci.yml`) — один job `release`:
 
-- **Запуск** — push в основную ветку на `gitlab.com`. Job читает `versions.txt` и завершается, если
-  релиз `vX.Y.Z` уже есть, — поэтому он подходит и когда GitLab основная платформа, и когда это
-  зеркало, куда теги приходят с GitHub.
+- **Запуск** — push тега `vX.Y.Z` на `gitlab.com` (`$CI_COMMIT_TAG`); версия — имя тега без `v`.
 - **Образ** — `golang:1` для Go (`GOTOOLCHAIN=auto` подтягивает версию из `go.mod`), `alpine:3`
   с `curl` для shell-программ.
 - **Сборка** — те же четыре платформы, имена архивов, `-ldflags` и `SHA256SUMS`, что и на GitHub;
   `origin` — `$CI_PROJECT_URL`, `channel` — `gitlab-release`.
 - **Публикация** — файлы загружаются в generic package registry проекта
-  (`/packages/generic/<name>/<version>/<file>`), затем `POST /releases` с `ref=$CI_COMMIT_SHA`
-  создаёт релиз (и тег, если его ещё нет) со ссылками на файлы.
+  (`/packages/generic/<name>/<version>/<file>`), затем `POST /releases` создаёт релиз для тега
+  со ссылками на файлы.
 - **Токен** — `CI_JOB_TOKEN`, ничего настраивать не нужно.

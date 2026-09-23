@@ -302,6 +302,11 @@ else
     done
     if [ -z "$_missing" ]; then
         ok "bump-patch/bump-minor/bump-major recipes present"
+        if grep -Eq 'git tag ' "$BUILD_FILE" 2>/dev/null && grep -Eq 'git push ' "$BUILD_FILE" 2>/dev/null; then
+            ok "bump recipes commit versions.txt, tag vX.Y.Z and push to every remote"
+        else
+            warn "bump recipes only edit versions.txt - they must also commit it, tag vX.Y.Z and push with --tags to every remote (see CONVENTIONS.md)"
+        fi
     else
         warn "missing recipes:$_missing"
     fi
@@ -334,6 +339,20 @@ if [ "$_wf_found" = "1" ]; then
     for _f in $WF_FILES; do
         grep -q 'SHA256SUMS' "$_f" 2>/dev/null || continue
         _rel=${_f#"$REPO_DIR"/}
+        case "$_rel" in
+            .gitlab-ci.yml)
+                if grep -Fq '$CI_COMMIT_TAG' "$_f"; then
+                    ok "$_rel runs on a vX.Y.Z tag push"
+                else
+                    warn "$_rel does not run on tags - the release is triggered by the vX.Y.Z tag pushed by bump-* (regenerate: init_install.sh --emit workflow-<lang>-gitlab)"
+                fi ;;
+            *)
+                if grep -Eq "^ +tags: *\[?'?v" "$_f"; then
+                    ok "$_rel runs on a vX.Y.Z tag push"
+                else
+                    warn "$_rel does not run on tags - the release is triggered by the vX.Y.Z tag pushed by bump-* (regenerate: init_install.sh --emit workflow-<lang>-<forge>)"
+                fi ;;
+        esac
         case "$_rel" in
             .github/*)
                 if grep -Fq "github.server_url == 'https://github.com'" "$_f"; then
@@ -372,11 +391,11 @@ if [ -d "$REPO_DIR/.git" ] && command -v git >/dev/null 2>&1; then
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
             | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
         if [ -n "$_latest" ] && [ "$_latest" = "$VERSION" ]; then
-            warn "tag v$VERSION already exists - bump versions.txt, otherwise the workflow will skip the release"
+            ok "versions.txt ($VERSION) matches the latest tag"
         elif [ -n "$_latest" ] && semver_le "$VERSION" "$_latest"; then
             warn "versions.txt ($VERSION) is below the latest tag (v$_latest)"
         elif [ -n "$_latest" ]; then
-            ok "versions.txt ($VERSION) is above the latest tag (v$_latest)"
+            warn "versions.txt ($VERSION) is above the latest tag (v$_latest) and is not tagged - use bump-* so that the tag is created and pushed"
         fi
     fi
 else

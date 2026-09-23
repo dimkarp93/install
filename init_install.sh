@@ -207,7 +207,7 @@ EOT
 
 tpl_bump_recipes() {
     cat <<'EOT'
-bump-patch:
+bump-patch: && (_bump-commit "patch")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -217,7 +217,7 @@ bump-patch:
     printf '%s.%s.%s\n' "$MAJ" "$MIN" "$((PAT + 1))" > versions.txt
     cat versions.txt
 
-bump-minor:
+bump-minor: && (_bump-commit "minor")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -227,7 +227,7 @@ bump-minor:
     printf '%s.%s.0\n' "$MAJ" "$((MIN + 1))" > versions.txt
     cat versions.txt
 
-bump-major:
+bump-major: && (_bump-commit "major")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -236,6 +236,24 @@ bump-major:
     EOF
     printf '%s.0.0\n' "$((MAJ + 1))" > versions.txt
     cat versions.txt
+
+_bump-commit level:
+    #!/usr/bin/env sh
+    set -eu
+    v=$(tr -d '[:space:]' < versions.txt)
+    if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+        git checkout -- versions.txt
+        echo "tag v$v already exists" >&2
+        exit 1
+    fi
+    git commit -q -m "bump {{level}}" -- versions.txt
+    git tag "v$v"
+    rc=0
+    for r in $(git remote); do
+        git push -q "$r" HEAD --tags || { echo "push to $r failed" >&2; rc=1; }
+    done
+    echo "Tagged v$v"
+    exit "$rc"
 
 EOT
 }
@@ -250,12 +268,7 @@ release level="patch":
         *) echo "level must be patch, minor or major" >&2; exit 1 ;;
     esac
     git diff --quiet && git diff --cached --quiet || { echo "working tree is dirty" >&2; exit 1; }
-    just bump-{{level}} >/dev/null
-    v=$(tr -d '[:space:]' < versions.txt)
-    git add versions.txt
-    git commit -q -m "release v$v"
-    git push origin HEAD
-    echo "Pushed v$v - the release workflow will create the tag"
+    just bump-{{level}}
 EOT
 }
 
@@ -423,8 +436,8 @@ just build
 just release patch
 ```
 
-`versions.txt` is bumped, committed and pushed; the tag and the release are
-created by the release workflow.
+`versions.txt` is bumped and committed, the tag `vX.Y.Z` is created and pushed
+together with the branch to every remote; the tag push starts the release workflow.
 
 ## Build info
 
@@ -445,7 +458,7 @@ name: Release
 
 on:
   push:
-    branches: [main, master]
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -459,19 +472,14 @@ jobs:
       GOFLAGS: -mod=vendor
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Read version
         id: ver
         run: |
-          if [ ! -f versions.txt ]; then
-            echo "versions.txt not found" >&2
-            exit 1
-          fi
-          v=$(tr -d '[:space:]' < versions.txt)
-          if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "versions.txt must contain semver X.Y.Z (got: '$v')" >&2
+          tag="${GITHUB_REF#refs/tags/}"
+          v="${tag#v}"
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "the tag must be vX.Y.Z (got: '$tag')" >&2
             exit 1
           fi
           bin="${{ github.event.repository.name }}"
@@ -488,24 +496,12 @@ jobs:
           echo "upstream=$upstream"  >> "$GITHUB_OUTPUT"
           echo "commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      - name: Check tag existence
-        id: tagcheck
-        run: |
-          if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Tag ${{ steps.ver.outputs.tag }} already exists - skipping the release"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Setup Go
-        if: steps.tagcheck.outputs.exists == 'false'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
       - name: Check vendor
-        if: steps.tagcheck.outputs.exists == 'false'
         run: |
           go mod vendor
           if [ -n "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)" ]; then
@@ -514,11 +510,9 @@ jobs:
           fi
 
       - name: Run tests
-        if: steps.tagcheck.outputs.exists == 'false'
         run: go test ./...
 
       - name: Build archives
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           BIN: ${{ steps.ver.outputs.bin }}
           VERSION: ${{ steps.ver.outputs.version }}
@@ -547,14 +541,12 @@ jobs:
           ls -la dist
 
       - name: Create release
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "${{ steps.ver.outputs.tag }}" \
-            --target "${{ github.sha }}" \
-            --notes "Automated release ${{ steps.ver.outputs.tag }} from versions.txt" \
+            --notes "Automated release ${{ steps.ver.outputs.tag }}" \
             dist/*
 EOT
 }
@@ -565,7 +557,7 @@ name: Release
 
 on:
   push:
-    branches: [main, master]
+    tags: ['v*']
 
 jobs:
   release:
@@ -587,13 +579,10 @@ jobs:
         id: ver
         run: |
           set -eu
-          if [ ! -f versions.txt ]; then
-            echo "versions.txt not found" >&2
-            exit 1
-          fi
-          v=$(tr -d '[:space:]' < versions.txt)
-          if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "versions.txt must contain semver X.Y.Z (got: '$v')" >&2
+          tag="${GITHUB_REF#refs/tags/}"
+          v="${tag#v}"
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "the tag must be vX.Y.Z (got: '$tag')" >&2
             exit 1
           fi
           bin="${GITHUB_REPOSITORY##*/}"
@@ -610,21 +599,7 @@ jobs:
           echo "upstream=$upstream"  >> "$GITHUB_OUTPUT"
           echo "commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      - name: Check tag existence
-        id: tagcheck
-        env:
-          TAG: ${{ steps.ver.outputs.tag }}
-        run: |
-          set -eu
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists - skipping the release"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Setup Go
-        if: steps.tagcheck.outputs.exists == 'false'
         run: |
           set -eu
           if [ ! -f go.mod ]; then
@@ -665,11 +640,9 @@ jobs:
           "$root/go/bin/go" version
 
       - name: Run tests
-        if: steps.tagcheck.outputs.exists == 'false'
         run: go test ./...
 
       - name: Build archives
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           BIN: ${{ steps.ver.outputs.bin }}
           VERSION: ${{ steps.ver.outputs.version }}
@@ -698,15 +671,14 @@ jobs:
           ls -la dist
 
       - name: Create release
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -eu
           api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
-          body=$(printf '{"tag_name":"%s","target_commitish":"%s","name":"%s","body":"Automated release %s from versions.txt"}' \
-            "$TAG" "$GITHUB_SHA" "$TAG" "$TAG")
+          body=$(printf '{"tag_name":"%s","name":"%s","body":"Automated release %s"}' \
+            "$TAG" "$TAG" "$TAG")
           resp=$(curl -fsS -X POST "${api}/releases" \
             -H "Authorization: token ${TOKEN}" \
             -H "Content-Type: application/json" \
@@ -736,7 +708,7 @@ name: Release
 
 on:
   push:
-    branches: [main, master]
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -747,19 +719,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Read version
         id: ver
         run: |
-          if [ ! -f versions.txt ]; then
-            echo "versions.txt not found" >&2
-            exit 1
-          fi
-          v=$(tr -d '[:space:]' < versions.txt)
-          if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "versions.txt must contain semver X.Y.Z (got: '$v')" >&2
+          tag="${GITHUB_REF#refs/tags/}"
+          v="${tag#v}"
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "the tag must be vX.Y.Z (got: '$tag')" >&2
             exit 1
           fi
           bin="${{ github.event.repository.name }}"
@@ -785,22 +752,10 @@ jobs:
           echo "upstream=$upstream"  >> "$GITHUB_OUTPUT"
           echo "commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      - name: Check tag existence
-        id: tagcheck
-        run: |
-          if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Tag ${{ steps.ver.outputs.tag }} already exists - skipping the release"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Check the script
-        if: steps.tagcheck.outputs.exists == 'false'
         run: sh -n "${{ steps.ver.outputs.src }}"
 
       - name: Build archives
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           BIN: ${{ steps.ver.outputs.bin }}
           SRC: ${{ steps.ver.outputs.src }}
@@ -830,14 +785,12 @@ jobs:
           ls -la dist
 
       - name: Create release
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "${{ steps.ver.outputs.tag }}" \
-            --target "${{ github.sha }}" \
-            --notes "Automated release ${{ steps.ver.outputs.tag }} from versions.txt" \
+            --notes "Automated release ${{ steps.ver.outputs.tag }}" \
             dist/*
 EOT
 }
@@ -848,7 +801,7 @@ name: Release
 
 on:
   push:
-    branches: [main, master]
+    tags: ['v*']
 
 jobs:
   release:
@@ -870,13 +823,10 @@ jobs:
         id: ver
         run: |
           set -eu
-          if [ ! -f versions.txt ]; then
-            echo "versions.txt not found" >&2
-            exit 1
-          fi
-          v=$(tr -d '[:space:]' < versions.txt)
-          if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "versions.txt must contain semver X.Y.Z (got: '$v')" >&2
+          tag="${GITHUB_REF#refs/tags/}"
+          v="${tag#v}"
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "the tag must be vX.Y.Z (got: '$tag')" >&2
             exit 1
           fi
           bin="${GITHUB_REPOSITORY##*/}"
@@ -902,25 +852,10 @@ jobs:
           echo "upstream=$upstream"  >> "$GITHUB_OUTPUT"
           echo "commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      - name: Check tag existence
-        id: tagcheck
-        env:
-          TAG: ${{ steps.ver.outputs.tag }}
-        run: |
-          set -eu
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists - skipping the release"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Check the script
-        if: steps.tagcheck.outputs.exists == 'false'
         run: sh -n "${{ steps.ver.outputs.src }}"
 
       - name: Build archives
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           BIN: ${{ steps.ver.outputs.bin }}
           SRC: ${{ steps.ver.outputs.src }}
@@ -950,15 +885,14 @@ jobs:
           ls -la dist
 
       - name: Create release
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -eu
           api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
-          body=$(printf '{"tag_name":"%s","target_commitish":"%s","name":"%s","body":"Automated release %s from versions.txt"}' \
-            "$TAG" "$GITHUB_SHA" "$TAG" "$TAG")
+          body=$(printf '{"tag_name":"%s","name":"%s","body":"Automated release %s"}' \
+            "$TAG" "$TAG" "$TAG")
           resp=$(curl -fsS -X POST "${api}/releases" \
             -H "Authorization: token ${TOKEN}" \
             -H "Content-Type: application/json" \
@@ -987,7 +921,7 @@ tpl_workflow_go_gitlab() {
 release:
   image: golang:1
   rules:
-    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
   variables:
     CGO_ENABLED: "0"
     GOWORK: "off"
@@ -997,16 +931,8 @@ release:
   script:
     - |
       set -eu
-      if [ ! -f versions.txt ]; then
-        echo "versions.txt not found" >&2
-        exit 1
-      fi
-      VERSION=$(tr -d '[:space:]' < versions.txt)
-      if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-        echo "versions.txt must contain semver X.Y.Z (got: '$VERSION')" >&2
-        exit 1
-      fi
-      TAG="v$VERSION"
+      TAG="$CI_COMMIT_TAG"
+      VERSION="${TAG#v}"
       BIN="$CI_PROJECT_NAME"
       ORIGIN="${CI_PROJECT_URL%/}"
       if [ -f upstream.txt ]; then
@@ -1016,11 +942,6 @@ release:
       fi
       COMMIT=$(printf '%s' "$CI_COMMIT_SHA" | cut -c1-7)
       API="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
-
-      if curl -fsS -o /dev/null -H "JOB-TOKEN: $CI_JOB_TOKEN" "$API/releases/$TAG" 2>/dev/null; then
-        echo "Release $TAG already exists - skipping the release"
-        exit 0
-      fi
 
       go mod vendor
       if [ -n "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)" ]; then
@@ -1058,8 +979,8 @@ release:
           "$file" "$pkg_url" "$file" "$file")
         links="${links:+$links,}$link"
       done
-      body=$(printf '{"tag_name":"%s","ref":"%s","name":"%s","description":"Automated release %s from versions.txt","assets":{"links":[%s]}}' \
-        "$TAG" "$CI_COMMIT_SHA" "$TAG" "$TAG" "$links")
+      body=$(printf '{"tag_name":"%s","name":"%s","description":"Automated release %s","assets":{"links":[%s]}}' \
+        "$TAG" "$TAG" "$TAG" "$links")
       curl -fsS -X POST "$API/releases" \
         -H "JOB-TOKEN: $CI_JOB_TOKEN" \
         -H "Content-Type: application/json" \
@@ -1073,23 +994,15 @@ tpl_workflow_sh_gitlab() {
 release:
   image: alpine:3
   rules:
-    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
   variables:
     CHANNEL: gitlab-release
   script:
     - apk add --no-cache curl >/dev/null
     - |
       set -eu
-      if [ ! -f versions.txt ]; then
-        echo "versions.txt not found" >&2
-        exit 1
-      fi
-      VERSION=$(tr -d '[:space:]' < versions.txt)
-      if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-        echo "versions.txt must contain semver X.Y.Z (got: '$VERSION')" >&2
-        exit 1
-      fi
-      TAG="v$VERSION"
+      TAG="$CI_COMMIT_TAG"
+      VERSION="${TAG#v}"
       BIN="$CI_PROJECT_NAME"
       if [ -f "${BIN}.sh" ]; then
         SRC="${BIN}.sh"
@@ -1107,11 +1020,6 @@ release:
       fi
       COMMIT=$(printf '%s' "$CI_COMMIT_SHA" | cut -c1-7)
       API="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
-
-      if curl -fsS -o /dev/null -H "JOB-TOKEN: $CI_JOB_TOKEN" "$API/releases/$TAG" 2>/dev/null; then
-        echo "Release $TAG already exists - skipping the release"
-        exit 0
-      fi
 
       sh -n "$SRC"
 
@@ -1143,8 +1051,8 @@ release:
           "$file" "$pkg_url" "$file" "$file")
         links="${links:+$links,}$link"
       done
-      body=$(printf '{"tag_name":"%s","ref":"%s","name":"%s","description":"Automated release %s from versions.txt","assets":{"links":[%s]}}' \
-        "$TAG" "$CI_COMMIT_SHA" "$TAG" "$TAG" "$links")
+      body=$(printf '{"tag_name":"%s","name":"%s","description":"Automated release %s","assets":{"links":[%s]}}' \
+        "$TAG" "$TAG" "$TAG" "$links")
       curl -fsS -X POST "$API/releases" \
         -H "JOB-TOKEN: $CI_JOB_TOKEN" \
         -H "Content-Type: application/json" \

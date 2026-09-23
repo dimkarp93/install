@@ -469,7 +469,7 @@ the repository conforms.
 Releasing the program afterwards is one command too:
 
 ```sh
-just release patch    # bump versions.txt -> commit -> push; the tag and the release are made by the workflow
+just release patch    # bump versions.txt -> commit -> tag vX.Y.Z -> push HEAD --tags to every remote; the tag starts the release
 ```
 
 `--emit` prints a template without creating anything — it is the single source of the templates:
@@ -615,7 +615,7 @@ language of the program (`init_install.sh` puts the right one in place by itself
 
 The shell templates build the executable by substituting the version and the origin into
 `<name>.sh` (or `<name>-init.sh`) with `sed` instead of calling `go build`, and they check the
-source with `sh -n`; everything else — the archive names, `SHA256SUMS`, the tag, the idempotency —
+source with `sh -n`; everything else — the archive names, `SHA256SUMS`, the tag trigger —
 is identical.
 
 The files in `workflows/` are generated from the templates embedded into `init_install.sh`:
@@ -623,12 +623,11 @@ The files in `workflows/` are generated from the templates embedded into `init_i
 
 All the workflows do the same thing:
 
-- read the version from `versions.txt`,
+- run on a push of a `v*` tag and take the version from the tag name (`versions.txt` is not read),
 - derive the executable name from the repository name,
 - build static executables for four platforms,
 - generate `SHA256SUMS`,
-- create a release with a `vX.Y.Z` tag,
-- skip the build if the tag (GitLab: the release) already exists (idempotent),
+- create a release for the pushed `vX.Y.Z` tag (the tag itself is made by the `bump-*` recipes),
 - check that `go mod vendor` changes nothing (`git status` of `go.mod`, `go.sum`, `vendor/`); the
   build runs with `GOWORK=off` and `GOFLAGS=-mod=vendor`, i.e. from `vendor/` only.
 
@@ -642,9 +641,9 @@ release with `gitea_install.sh` (with the `-s` flag, see
 [Installing from Gitea](#installing-from-gitea-gitea_installsh)); they differ only in the API and
 download addresses, the flag set is the same.
 
-Cutting a new version: bump the version (`just bump-patch` / `bump-minor` / `bump-major` — see
-[CONVENTIONS.en.md](CONVENTIONS.en.md)), commit `versions.txt` and merge into the `main` / `master`
-branch.
+Cutting a new version: `just bump-patch` / `make bump-patch` (or `bump-minor` / `bump-major`) on
+`main` / `master`. The recipe commits `versions.txt`, creates the `vX.Y.Z` tag and pushes the branch
+with the tags to every remote — see [CONVENTIONS.en.md](CONVENTIONS.en.md).
 
 ### Specifics of the Gitea template
 
@@ -653,15 +652,14 @@ branch.
 calls through `curl`. This is needed because Gitea pulls actions from github.com, and they are
 unavailable in an isolated network. In practice this means:
 
-- **Checkout** — `git init` plus a shallow fetch of the `$GITHUB_SHA` commit from
+- **Checkout** — `git init` plus a shallow fetch of the tagged `$GITHUB_SHA` commit from
   `$GITHUB_SERVER_URL`.
 - **Go** — the version is read from `go.mod` (the `toolchain` directive, otherwise `go`); if only
   `X.Y` is specified, the exact patch is resolved through `https://go.dev/dl/?mode=json`. The
   tarball is installed into `$HOME/.local/go` (no root required). The runner needs access to
   `go.dev`.
-- **Release** — `POST /api/v1/repos/{owner}/{repo}/releases`: Gitea creates the tag from
-  `target_commitish` itself, no separate `git push --tags` is needed. Then the archives and
-  `SHA256SUMS` are uploaded as assets.
+- **Release** — `POST /api/v1/repos/{owner}/{repo}/releases` for the already pushed tag. Then the
+  archives and `SHA256SUMS` are uploaded as assets.
 - **Token** — `secrets.GITHUB_TOKEN`, which Gitea issues to every job automatically; there is no
   need to create a secret by hand. If the API answers `403`, enable write access for the Actions
   token in the repository settings or substitute your own token with the `write:repository` scope.
@@ -672,14 +670,13 @@ unavailable in an isolated network. In practice this means:
 
 `workflows/release-gitlab.yml` (→ `.gitlab-ci.yml`) is a single `release` job:
 
-- **Trigger** — a push to the default branch on `gitlab.com`. The job reads `versions.txt` and exits
-  if the `vX.Y.Z` release already exists, so it works both when GitLab is the main platform and when
-  it is a mirror whose tags arrive from GitHub.
+- **Trigger** — a push of a `vX.Y.Z` tag on `gitlab.com` (`$CI_COMMIT_TAG`); the version is the tag
+  name without `v`.
 - **Image** — `golang:1` for Go (`GOTOOLCHAIN=auto` fetches the version from `go.mod`), `alpine:3`
   with `curl` for shell programs.
 - **Build** — the same four platforms, archive names, `-ldflags` and `SHA256SUMS` as on GitHub;
   `origin` is `$CI_PROJECT_URL`, `channel` is `gitlab-release`.
 - **Publishing** — the files are uploaded into the project's generic package registry
-  (`/packages/generic/<name>/<version>/<file>`), then `POST /releases` with `ref=$CI_COMMIT_SHA`
-  creates the release (and the tag, if it does not exist yet) with release links to the files.
+  (`/packages/generic/<name>/<version>/<file>`), then `POST /releases` creates the release for the tag
+  with release links to the files.
 - **Token** — `CI_JOB_TOKEN`, nothing needs to be configured.

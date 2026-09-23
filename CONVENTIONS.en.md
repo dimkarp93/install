@@ -175,17 +175,22 @@ Without the `v` prefix and without any extra text — just the version number on
 
 For bumping the version the repository provides `bump-patch`, `bump-minor`, `bump-major` targets in
 its `Justfile` (or `Makefile`). Each of them increments the corresponding version component in
-`versions.txt` (zeroing the lower components) — following the release tooling style (see the
-`Justfile` style of the `jira` tool):
+`versions.txt` (zeroing the lower components):
 
 - `bump-patch`: `1.2.3` → `1.2.4`
 - `bump-minor`: `1.2.3` → `1.3.0`
 - `bump-major`: `1.2.3` → `2.0.0`
 
+and then publishes it:
+
+1. commits `versions.txt` alone with the message `bump <patch|minor|major>`;
+2. creates the tag `vX.Y.Z` (refusing and restoring `versions.txt` if the tag already exists);
+3. runs `git push <remote> HEAD --tags` for every remote from `git remote`.
+
 An example of the targets for a `Justfile`:
 
 ```just
-bump-patch:
+bump-patch: && (_bump-commit "patch")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -195,7 +200,7 @@ bump-patch:
     printf '%s.%s.%s\n' "$MAJ" "$MIN" "$((PAT + 1))" > versions.txt
     cat versions.txt
 
-bump-minor:
+bump-minor: && (_bump-commit "minor")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -205,7 +210,7 @@ bump-minor:
     printf '%s.%s.0\n' "$MAJ" "$((MIN + 1))" > versions.txt
     cat versions.txt
 
-bump-major:
+bump-major: && (_bump-commit "major")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < versions.txt)
@@ -214,10 +219,50 @@ bump-major:
     EOF
     printf '%s.0.0\n' "$((MAJ + 1))" > versions.txt
     cat versions.txt
+
+_bump-commit level:
+    #!/usr/bin/env sh
+    set -eu
+    v=$(tr -d '[:space:]' < versions.txt)
+    if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+        git checkout -- versions.txt
+        echo "tag v$v already exists" >&2
+        exit 1
+    fi
+    git commit -q -m "bump {{level}}" -- versions.txt
+    git tag "v$v"
+    rc=0
+    for r in $(git remote); do
+        git push -q "$r" HEAD --tags || { echo "push to $r failed" >&2; rc=1; }
+    done
+    echo "Tagged v$v"
+    exit "$rc"
 ```
 
-Cutting a new version: `just bump-patch` (or `bump-minor` / `bump-major`) → commit `versions.txt` →
-merge into the `main` / `master` branch. The workflow creates the tag and the release.
+For a `Makefile` the same steps live in a helper target that every `bump-*` target calls:
+
+```make
+bump-patch:
+	@v=$$(tr -d '[:space:]' < versions.txt); \
+	MAJ=$${v%%.*}; rest=$${v#*.}; MIN=$${rest%%.*}; PAT=$${rest##*.}; \
+	printf '%s.%s.%s\n' "$$MAJ" "$$MIN" "$$((PAT + 1))" > versions.txt; \
+	cat versions.txt
+	@$(MAKE) --no-print-directory _bump-commit LEVEL=patch
+
+_bump-commit:
+	@v=$$(tr -d '[:space:]' < versions.txt); \
+	if git rev-parse -q --verify "refs/tags/v$$v" >/dev/null; then \
+		git checkout -- versions.txt; echo "tag v$$v already exists" >&2; exit 1; \
+	fi; \
+	git commit -q -m "bump $(LEVEL)" -- versions.txt && git tag "v$$v" || exit 1; \
+	rc=0; for r in $$(git remote); do \
+		git push -q "$$r" HEAD --tags || { echo "push to $$r failed" >&2; rc=1; }; \
+	done; \
+	echo "Tagged v$$v"; exit $$rc
+```
+
+Cutting a new version is a single command: `just bump-patch` / `make bump-patch` (or `bump-minor` /
+`bump-major`) on `main` / `master`. The pushed tag starts the release workflow.
 
 ## Origin
 
@@ -425,11 +470,12 @@ embedded `origin` differs. The `SHA256SUMS` files of releases published by diffe
 therefore cannot be compared with each other. Each mirror is a release channel of its own; compare
 checksums only within one channel.
 
-### Idempotent CI release
+### The release is triggered by the tag
 
-If the release for the tag already exists, the workflow skips the build. This makes pushing to
-`master` again safe, and it also covers platforms where the tag arrives together with a mirror
-sync. The GitHub and Gitea templates check the tag, the GitLab template checks the release.
+The release workflow runs on a push of a `v*` tag (GitHub / Gitea: `on.push.tags`, GitLab:
+`$CI_COMMIT_TAG`), not on a push to the branch. The version is taken from the tag name, so the
+workflow neither reads `versions.txt` nor creates tags: the tag is made and pushed by the `bump-*`
+recipes. A plain push to `master` does not start a release at all.
 
 ### The release workflow runs only on its own public domain
 
@@ -444,7 +490,7 @@ jobs:
 # .gitlab-ci.yml
 release:
   rules:
-    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
 ```
 
 In mirrors on other instances (a private GitHub Enterprise, an internal GitLab, a Gitea reading
@@ -456,7 +502,7 @@ without the guard.
 
 Use the template from this repository — it already implements all the conventions: computing the
 executable name (from the repository name), building for four platforms, generating `SHA256SUMS`,
-idempotency.
+starting on a `vX.Y.Z` tag.
 
 - GitHub Actions: `workflows/release.yml` → `.github/workflows/release.yml`
 - GitLab CI: `workflows/release-gitlab.yml` → `.gitlab-ci.yml`
@@ -467,8 +513,7 @@ For shell programs: `release-sh.yml`, `release-sh-gitlab.yml`, `release-sh-gitea
 The templates are interchangeable: the archive names, `SHA256SUMS` and the `vX.Y.Z` tag format are
 identical, so the installers of all platforms work the same way. The GitLab template uploads the
 archives into the project's generic package registry and attaches them to the release as release
-links (not as attachments); on push to the default branch it creates the release and, if the tag has
-not arrived from a mirror yet, the tag too. The
+links (not as attachments). The
 Gitea template uses no external actions (checkout, installing Go and publishing the release are
 shell `run:` steps, the release is created through the Gitea API), so it also works where the
 runner cannot download actions from github.com.
