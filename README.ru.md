@@ -2,7 +2,7 @@
 
 *Языки: **Русский** · [English](README.en.md)*
 
-Универсальный установщик программ из GitHub и Gitea Releases и шаблон CI-релиза.
+Универсальный установщик программ из GitHub, GitLab и Gitea Releases и шаблоны CI-релиза.
 
 Программа может быть написана на любом языке — установщикам важны лишь готовый исполняемый
 файл и соблюдение [конвенций](CONVENTIONS.ru.md). Отдельно есть `go_install.sh` — необязательный
@@ -11,7 +11,7 @@
 ## Установка установщиков в PATH
 
 Чтобы не вводить длинную команду `curl` каждый раз, установите установщики
-(`github_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh`,
+(`github_install.sh`, `gitlab_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh`,
 `check_install.sh` и `init_install.sh`) в PATH один раз:
 
 ```sh
@@ -142,6 +142,21 @@ GITHUB_TOKEN=ghp_... github_install.sh owner/private-repo
 GITHUB_TOKEN=ghp_... github_install.sh owner/repo
 ```
 
+### Другие инстансы GitHub (`GITHUB_URL`)
+
+По умолчанию скрипт работает с публичным `https://github.com`. Чтобы установить из другого инстанса
+(GitHub Enterprise Server, зеркало), задайте его адрес флагом `-s` / `--server` или переменной
+окружения `GITHUB_URL` (флаг приоритетнее; схему можно опустить):
+
+```sh
+GITHUB_URL=https://github.example.com github_install.sh owner/repo
+github_install.sh -s github.example.com owner/repo
+```
+
+Адрес API вычисляется из него: `https://api.github.com` для `github.com`, `<GITHUB_URL>/api/v3` для
+любого другого инстанса. Если API расположен иначе, задайте `GITHUB_API_URL`. В сообщениях видны
+итоговые URL, так что понятно, откуда шла установка.
+
 ## Установка из Gitea (`gitea_install.sh`)
 
 `gitea_install.sh` устанавливает программу из релизов self-hosted Gitea — например из тех, что
@@ -225,6 +240,37 @@ gitea_install.sh -u owner/private-repo
 Без токена приватный репозиторий недоступен: Gitea ответит `401`/`404`, и скрипт подскажет задать
 `GITEA_TOKEN`. Публичным репозиториям токен не нужен.
 
+## Установка из GitLab (`gitlab_install.sh`)
+
+`gitlab_install.sh` ставит программу из GitLab Releases — например, собранных шаблоном
+`workflows/release-gitlab.yml`. Он понимает те же флаги, что и `gitea_install.sh`
+(`-s`, `-i`, `--list`, `-u`, `-D`, `-F`, `--user-only`), и те же позиционные аргументы:
+`<namespace/project> [binary-name] [version]`; namespace может быть вложенным (`group/subgroup/project`).
+
+Инстанс берётся из `-s` / `--server`, затем из `GITLAB_URL`, по умолчанию — `https://gitlab.com`:
+
+```sh
+gitlab_install.sh dimkarp93/kdbx-cli
+gitlab_install.sh --list dimkarp93/kdbx-cli
+GITLAB_URL=https://gitlab.example.com gitlab_install.sh group/tool
+```
+
+Через `curl`, без установки скрипта:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/gitlab_install.sh \
+  | sh -s -- dimkarp93/kdbx-cli
+```
+
+Релиз читается через API (`/api/v4/projects/<namespace%2Fproject>/releases`); архив и `SHA256SUMS` —
+это ссылки релиза (`assets.links`) с соответствующими именами, скрипт скачивает их по
+`direct_asset_url`. Для приватного проекта передайте токен со scope `read_api` в `GITLAB_TOKEN`: он
+уходит заголовком `PRIVATE-TOKEN` и в API, и в загрузки.
+
+```sh
+GITLAB_TOKEN=glpat-... gitlab_install.sh group/private-tool
+```
+
 ## Установка Go-программ через `go install` (`go_install.sh`)
 
 `go_install.sh` — необязательная альтернатива для тех, у кого уже установлен Go.
@@ -240,6 +286,11 @@ go_install.sh --list github.com/dimkarp93/md-pdf
 
 Релиз, архивы и `SHA256SUMS` при этом не нужны — версия берётся из git-тега
 репозитория, а целостность публичных модулей проверяет `sum.golang.org`.
+
+`go_install.sh` всегда устанавливает из публичного `github.com` через стандартный механизм модулей
+Go. `GITHUB_URL` / `GITLAB_URL` не используются: `go install` находит модуль по пути, а не по URL.
+Если `GITHUB_URL` указывает на другой инстанс, скрипт печатает предупреждение и продолжает как
+обычно. Для установки из зеркала используйте `github_install.sh` / `gitlab_install.sh`.
 
 ### Когда использовать, а когда нет
 
@@ -261,7 +312,8 @@ go_install.sh --list github.com/dimkarp93/md-pdf
 ### Определение пакета и имени бинаря
 
 Имя исполняемого файла `go install` берёт из последнего сегмента пути пакета. Скрипт
-сначала пробует `<модуль>/cmd/<имя>` (рекомендуемая структура), затем корень модуля.
+сначала пробует `<модуль>/cmd/<имя>` (раскладка, которую требуют конвенции), затем корень модуля
+(для сторонних модулей).
 Суффикс major-версии (`/v2`, `/v3`) при вычислении имени отбрасывается. Путь пакета
 можно задать явно:
 
@@ -377,7 +429,9 @@ init_install.sh --lang sh ~/dev/mytool               # по абсолютном
 | `.gitignore` | собранный в корне исполняемый файл, `dist/` |
 | `cmd/<name>/main.go` или `<name>.sh` | скелет с `--version` / `--origin` / `--buildinfo` |
 | `go.mod` | `module <host>/<owner>/<name>` (для `--lang go`) |
-| `.github/workflows/release.yml` | workflow релиза (`--ci gitea` или `--ci both` добавят Gitea-вариант) |
+| `.github/workflows/release.yml` | GitHub-workflow релиза |
+| `.gitlab-ci.yml`, `.gitea/workflows/release.yml` | GitLab- / Gitea-workflow релиза (с `--ci gitlab` / `--ci gitea`) |
+| `vendor/`, `.gitattributes` | зависимости в vendor (для `--lang go`); `justfile` экспортирует `GOWORK=off` / `GOFLAGS=-mod=vendor` и содержит рецепты `vendor` / `vendor-check` |
 | `README.md` | как установить, собрать и выпустить |
 
 Для `--lang go` скелет использует
@@ -393,8 +447,8 @@ init_install.sh --lang sh ~/dev/mytool               # по абсолютном
 --owner OWNER                 владелец репозитория (обязателен для --lang go)
 --host HOST                   хост репозитория (по умолчанию github.com)
 --upstream URL                записать upstream.txt (для зеркал)
---layout cmd|root             go: cmd/<name>/main.go (по умолчанию) или main.go в корне
---ci github|gitea|both|none   какой workflow релиза положить (по умолчанию github)
+--ci LIST                     workflow релиза: список через запятую из github, gitea,
+                              gitlab; или all, none (по умолчанию github)
 --remote URL                  git remote add origin URL
 --no-git                      не делать git init и первый коммит
 --force                       достроить существующий каталог (существующие файлы сохраняются)
@@ -428,7 +482,12 @@ git-тегов, `versions.txt` относительно последнего т�
 сборки (корректный `upstream.txt`, если он есть, и подстановку origin в цели сборки и в workflow
 релиза). Если есть `go.mod`, дополнительно проверяются требования раздела про `go install`:
 сетевой путь модуля, его последний сегмент против имени бинаря, суффикс `/vN` для мажорных версий
-от `2.0.0`, отсутствие `replace` и расположение `package main`. Аргумент — путь к репозиторию:
+от `2.0.0`, отсутствие `replace` и расположение `package main` (только `cmd/<имя>/`, в корне модуля его нет), а также обязательный vendoring:
+`vendor/modules.txt`, если в `go.mod` есть зависимости, отсутствие `vendor` в `.gitignore`, экспорт
+`GOWORK=off` / `GOFLAGS=-mod=vendor` в файле сборки, рецепт `vendor-check` (нет строки в
+`.gitattributes` или остался `go.work` — предупреждение). GitHub / GitLab release-workflow без защиты по своему публичному домену
+(`github.server_url == 'https://github.com'`, `$CI_SERVER_HOST == "gitlab.com"`) — это `[FAIL]`.
+Аргумент — путь к репозиторию:
 абсолютный путь либо имя или относительный путь, который разрешается относительно текущего
 каталога. Если путь не указан, берётся текущий каталог.
 
@@ -440,7 +499,8 @@ check_install.sh ~/dev/myapp     # по абсолютному пути
 
 Флаг `--build` дополнительно собирает исполняемый файл и проверяет его вывод: что `--version`
 выводит версию из `versions.txt`, а `--origin` — один канонический URL (или `local`) без учётных
-данных внутри:
+данных внутри. Для Go-модуля с зависимостями ещё запускается `GOWORK=off go list -mod=vendor ./...`: он
+падает на рассогласованном vendor, не трогая рабочую копию:
 
 ```sh
 check_install.sh --build myapp
@@ -467,7 +527,14 @@ check_install.sh --fix myapp
   и `/dist/`;
 - нет рецептов `bump-*` в `justfile` → дописываются в конец;
 - нет ни одного workflow релиза → добавляется `.github/workflows/release.yml` (Go- или
-  shell-вариант, в зависимости от наличия `go.mod`).
+  shell-вариант, в зависимости от наличия `go.mod`);
+- Go-модуль с зависимостями без `vendor/` → `GOWORK=off go mod vendor`;
+- есть `vendor/` → в `.gitattributes` добавляется `vendor/** linguist-generated=true -diff`;
+- Go и `justfile` → дописываются строки `export GOWORK/GOFLAGS` и рецепты `vendor` / `vendor-check`,
+  если их нет (для `Makefile` — только подсказка).
+
+Существующий workflow не перезаписывается: если в нём нет защиты по домену, перегенерируйте его
+через `init_install.sh --emit workflow-go-github` (или `-sh-`, `-gitlab`).
 
 `Makefile` автоматически не правится: синтаксис целей отличается, поэтому `--fix` только сообщает,
 что цели `bump-*` нужно добавить руками (готовый блок есть в
@@ -534,12 +601,13 @@ channel=gitea-release
 
 ## Использование шаблона CI-релиза
 
-В каталоге `workflows/` лежат четыре равнозначных шаблона — выберите по платформе и языку
+В каталоге `workflows/` лежат шесть равнозначных шаблонов — выберите по платформе и языку
 программы (`init_install.sh` кладёт нужный сам):
 
 | Платформа | Go | POSIX shell | Куда копировать |
 |---|---|---|---|
 | GitHub Actions | `workflows/release.yml` | `workflows/release-sh.yml` | `.github/workflows/release.yml` |
+| GitLab CI | `workflows/release-gitlab.yml` | `workflows/release-sh-gitlab.yml` | `.gitlab-ci.yml` |
 | Gitea Actions | `workflows/release-gitea.yml` | `workflows/release-sh-gitea.yml` | `.gitea/workflows/release.yml` |
 
 Shell-шаблоны собирают исполняемый файл подстановкой версии и origin в `<name>.sh` (или
@@ -556,10 +624,16 @@ Shell-шаблоны собирают исполняемый файл подст
 - собирают статические исполняемые файлы для четырёх платформ,
 - генерируют `SHA256SUMS`,
 - создают релиз с тегом `vX.Y.Z`,
-- пропускают сборку, если тег уже существует (идемпотентно).
+- пропускают сборку, если тег (в GitLab — релиз) уже существует (идемпотентно),
+- проверяют, что `go mod vendor` ничего не меняет (`git status` по `go.mod`, `go.sum`, `vendor/`);
+  сборка идёт с `GOWORK=off` и `GOFLAGS=-mod=vendor`, то есть только из `vendor/`.
 
-Имена архивов, `SHA256SUMS` и формат тега одинаковы на обеих платформах. Релиз из GitHub ставится
-`github_install.sh`, релиз из Gitea — `gitea_install.sh` (с флагом `-s`, см. раздел
+GitHub-шаблон выполняется только на `github.com` (`if: github.server_url == 'https://github.com'`),
+GitLab-шаблон — только на `gitlab.com` (`$CI_SERVER_HOST == "gitlab.com"`): в зеркалах на других
+инстансах job пропускается. У Gitea-шаблонов такой защиты нет.
+
+Имена архивов, `SHA256SUMS` и формат тега одинаковы на всех платформах. Релиз из GitHub ставится
+`github_install.sh`, из GitLab — `gitlab_install.sh`, из Gitea — `gitea_install.sh` (с флагом `-s`, см. раздел
 [Установка из Gitea](#установка-из-gitea-gitea_installsh)); отличаются они только адресами API и
 загрузки, набор флагов один и тот же.
 
@@ -586,3 +660,19 @@ API через `curl`. Это нужно потому, что Gitea тянет a
   Actions в настройках репозитория или подставьте свой токен с правом `write:repository`.
 - **`runs-on: ubuntu-latest`** — это метка (label) раннера. Если ваш `act_runner`
   зарегистрирован с другими метками, поправьте `runs-on` под них.
+
+### Особенности GitLab-шаблона
+
+`workflows/release-gitlab.yml` (→ `.gitlab-ci.yml`) — один job `release`:
+
+- **Запуск** — push в основную ветку на `gitlab.com`. Job читает `versions.txt` и завершается, если
+  релиз `vX.Y.Z` уже есть, — поэтому он подходит и когда GitLab основная платформа, и когда это
+  зеркало, куда теги приходят с GitHub.
+- **Образ** — `golang:1` для Go (`GOTOOLCHAIN=auto` подтягивает версию из `go.mod`), `alpine:3`
+  с `curl` для shell-программ.
+- **Сборка** — те же четыре платформы, имена архивов, `-ldflags` и `SHA256SUMS`, что и на GitHub;
+  `origin` — `$CI_PROJECT_URL`, `channel` — `gitlab-release`.
+- **Публикация** — файлы загружаются в generic package registry проекта
+  (`/packages/generic/<name>/<version>/<file>`), затем `POST /releases` с `ref=$CI_COMMIT_SHA`
+  создаёт релиз (и тег, если его ещё нет) со ссылками на файлы.
+- **Токен** — `CI_JOB_TOKEN`, ничего настраивать не нужно.

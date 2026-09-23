@@ -2,7 +2,7 @@
 
 *Languages: **English** · [Русский](README.ru.md)*
 
-A universal installer for programs published in GitHub and Gitea Releases, plus a CI release template.
+A universal installer for programs published in GitHub, GitLab and Gitea Releases, plus CI release templates.
 
 The program may be written in any language — the installers only care about a ready-made executable
 and about following the [conventions](CONVENTIONS.en.md). There is also a separate `go_install.sh` —
@@ -12,7 +12,7 @@ have Go installed.
 ## Installing the installers into PATH
 
 To avoid typing a long `curl` command every time, install the installers
-(`github_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh`,
+(`github_install.sh`, `gitlab_install.sh`, `gitea_install.sh`, `local_install.sh`, `go_install.sh`,
 `check_install.sh` and `init_install.sh`) into PATH once:
 
 ```sh
@@ -144,6 +144,21 @@ token:
 GITHUB_TOKEN=ghp_... github_install.sh owner/repo
 ```
 
+### Other GitHub instances (`GITHUB_URL`)
+
+By default the script works with the public `https://github.com`. To install from another instance
+(GitHub Enterprise Server, a mirror), set its address with the `-s` / `--server` flag or the
+`GITHUB_URL` environment variable (the flag wins; the scheme may be omitted):
+
+```sh
+GITHUB_URL=https://github.example.com github_install.sh owner/repo
+github_install.sh -s github.example.com owner/repo
+```
+
+The API address is derived from it: `https://api.github.com` for `github.com`, `<GITHUB_URL>/api/v3`
+for any other instance. If the API lives elsewhere, set `GITHUB_API_URL`. The messages print the
+resulting URLs, so it is visible where the installation came from.
+
 ## Installing from Gitea (`gitea_install.sh`)
 
 `gitea_install.sh` installs a program from the releases of a self-hosted Gitea — for example those
@@ -228,6 +243,38 @@ attachments from a non-standard path or from external storage.
 Without a token a private repository is unreachable: Gitea answers `401`/`404`, and the script
 suggests setting `GITEA_TOKEN`. Public repositories do not need a token.
 
+## Installing from GitLab (`gitlab_install.sh`)
+
+`gitlab_install.sh` installs a program from GitLab Releases — for example those built by the
+`workflows/release-gitlab.yml` template. It understands the same flags as `gitea_install.sh`
+(`-s`, `-i`, `--list`, `-u`, `-D`, `-F`, `--user-only`) and the same positional arguments:
+`<namespace/project> [binary-name] [version]`; the namespace may be nested (`group/subgroup/project`).
+
+The instance is taken from `-s` / `--server`, then from `GITLAB_URL`, and defaults to
+`https://gitlab.com`:
+
+```sh
+gitlab_install.sh dimkarp93/kdbx-cli
+gitlab_install.sh --list dimkarp93/kdbx-cli
+GITLAB_URL=https://gitlab.example.com gitlab_install.sh group/tool
+```
+
+Via `curl`, without installing the script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dimkarp93/install/master/gitlab_install.sh \
+  | sh -s -- dimkarp93/kdbx-cli
+```
+
+The release is read through the API (`/api/v4/projects/<namespace%2Fproject>/releases`); the archive
+and `SHA256SUMS` are the release links (`assets.links`) with the matching names — the script
+downloads them by `direct_asset_url`. For a private project pass a token with the `read_api` scope in
+`GITLAB_TOKEN`: it is sent as the `PRIVATE-TOKEN` header both to the API and to the downloads.
+
+```sh
+GITLAB_TOKEN=glpat-... gitlab_install.sh group/private-tool
+```
+
 ## Installing Go programs via `go install` (`go_install.sh`)
 
 `go_install.sh` is an optional alternative for those who already have Go installed.
@@ -243,6 +290,11 @@ go_install.sh --list github.com/dimkarp93/md-pdf
 
 No release, archives or `SHA256SUMS` are needed here — the version comes from the repository git
 tag, and the integrity of public modules is verified by `sum.golang.org`.
+
+`go_install.sh` always installs from the public `github.com` through the standard Go module
+mechanism. `GITHUB_URL` / `GITLAB_URL` are not used: `go install` finds a module by its path, not by a
+URL. If `GITHUB_URL` points at another instance, the script prints a warning and carries on as usual.
+To install from a mirror, use `github_install.sh` / `gitlab_install.sh`.
 
 ### When to use it and when not to
 
@@ -264,7 +316,8 @@ these scenarios are built around. Use `github_install.sh` or `gitea_install.sh` 
 ### Detecting the package and the binary name
 
 `go install` derives the executable name from the last segment of the package path. The script
-first tries `<module>/cmd/<name>` (the recommended layout) and then the module root. The
+first tries `<module>/cmd/<name>` (the layout required by the conventions) and then the module root
+(for third-party modules). The
 major-version suffix (`/v2`, `/v3`) is dropped when computing the name. The package path can be set
 explicitly:
 
@@ -379,7 +432,9 @@ What ends up in the repository:
 | `.gitignore` | the executable built in the root, `dist/` |
 | `cmd/<name>/main.go` or `<name>.sh` | the skeleton with `--version` / `--origin` / `--buildinfo` |
 | `go.mod` | `module <host>/<owner>/<name>` (for `--lang go`) |
-| `.github/workflows/release.yml` | the release workflow (`--ci gitea` or `--ci both` add the Gitea one) |
+| `.github/workflows/release.yml` | the GitHub release workflow |
+| `.gitlab-ci.yml`, `.gitea/workflows/release.yml` | the GitLab / Gitea release workflows (with `--ci gitlab` / `--ci gitea`) |
+| `vendor/`, `.gitattributes` | vendored dependencies (for `--lang go`); the `justfile` exports `GOWORK=off` / `GOFLAGS=-mod=vendor` and has the `vendor` / `vendor-check` recipes |
 | `README.md` | how to install, build and release |
 
 For `--lang go` the skeleton uses
@@ -395,8 +450,8 @@ The flags:
 --owner OWNER                 repository owner (required for --lang go)
 --host HOST                   repository host (default: github.com)
 --upstream URL                write upstream.txt (for mirrors)
---layout cmd|root             go: cmd/<name>/main.go (default) or main.go in the root
---ci github|gitea|both|none   which release workflow to add (default: github)
+--ci LIST                     release workflows: a comma-separated list of github, gitea,
+                              gitlab; or all, none (default: github)
 --remote URL                  git remote add origin URL
 --no-git                      do not run git init and do not create the first commit
 --force                       fill an existing directory (existing files are kept)
@@ -431,7 +486,12 @@ in `.gitignore` and the origin (a valid `upstream.txt` if present, and the origi
 build target and by the release workflow). If there is a `go.mod`, the requirements of the
 `go install` section are checked as well: a network module path, its last segment against the
 binary name, the `/vN` suffix for major versions from `2.0.0` on, the absence of `replace` and the
-location of `package main`. The argument is a path to the repository: an absolute path, or a name
+location of `package main` (only `cmd/<name>/`, none in the module root), and the mandatory vendoring: `vendor/modules.txt` when `go.mod` has
+dependencies, `vendor/` not ignored, the `GOWORK=off` / `GOFLAGS=-mod=vendor` exports in the build
+file, the `vendor-check` recipe (a missing `.gitattributes` line or a leftover `go.work` is a
+warning). A GitHub / GitLab release workflow without the
+guard on its public domain (`github.server_url == 'https://github.com'`,
+`$CI_SERVER_HOST == "gitlab.com"`) is a `[FAIL]`. The argument is a path to the repository: an absolute path, or a name
 or relative path resolved against the current directory. If no path is given, the current directory
 is used.
 
@@ -443,7 +503,8 @@ check_install.sh ~/dev/myapp     # by absolute path
 
 The `--build` flag additionally builds the executable and checks its output: that `--version` prints
 the version from `versions.txt`, and that `--origin` prints one canonical URL (or `local`) with no
-credentials in it:
+credentials in it. For a Go module with dependencies it also runs `GOWORK=off go list -mod=vendor ./...`, which fails
+on inconsistent vendoring without touching the working copy:
 
 ```sh
 check_install.sh --build myapp
@@ -469,7 +530,14 @@ check_install.sh --fix myapp
 - no `.gitignore`, or no executable in it → created or extended with `/<name>` and `/dist/`;
 - no `bump-*` recipes in the `justfile` → appended to the end;
 - no release workflow at all → `.github/workflows/release.yml` is added (the Go or the shell
-  variant, depending on whether there is a `go.mod`).
+  variant, depending on whether there is a `go.mod`);
+- Go module with dependencies and no `vendor/` → `GOWORK=off go mod vendor`;
+- `vendor/` is present → `vendor/** linguist-generated=true -diff` is added to `.gitattributes`;
+- Go and a `justfile` → the `export GOWORK/GOFLAGS` lines and the `vendor` / `vendor-check` recipes
+  are appended if missing (a `Makefile` only gets a hint).
+
+An existing workflow is never overwritten: if it has no domain guard, regenerate it with
+`init_install.sh --emit workflow-go-github` (or `-sh-`, `-gitlab`).
 
 A `Makefile` is not edited automatically: the syntax of the targets differs, so `--fix` only says
 that the `bump-*` targets have to be added by hand (there is a ready block in
@@ -536,12 +604,13 @@ The full description of the requirements is in [CONVENTIONS.en.md](CONVENTIONS.e
 
 ## Using the CI release template
 
-The `workflows/` directory holds four equivalent templates — pick one by platform and by the
+The `workflows/` directory holds six equivalent templates — pick one by platform and by the
 language of the program (`init_install.sh` puts the right one in place by itself):
 
 | Platform | Go | POSIX shell | Where to copy it |
 |---|---|---|---|
 | GitHub Actions | `workflows/release.yml` | `workflows/release-sh.yml` | `.github/workflows/release.yml` |
+| GitLab CI | `workflows/release-gitlab.yml` | `workflows/release-sh-gitlab.yml` | `.gitlab-ci.yml` |
 | Gitea Actions | `workflows/release-gitea.yml` | `workflows/release-sh-gitea.yml` | `.gitea/workflows/release.yml` |
 
 The shell templates build the executable by substituting the version and the origin into
@@ -559,12 +628,19 @@ All the workflows do the same thing:
 - build static executables for four platforms,
 - generate `SHA256SUMS`,
 - create a release with a `vX.Y.Z` tag,
-- skip the build if the tag already exists (idempotent).
+- skip the build if the tag (GitLab: the release) already exists (idempotent),
+- check that `go mod vendor` changes nothing (`git status` of `go.mod`, `go.sum`, `vendor/`); the
+  build runs with `GOWORK=off` and `GOFLAGS=-mod=vendor`, i.e. from `vendor/` only.
 
-The archive names, `SHA256SUMS` and the tag format are identical on both platforms. A GitHub
-release is installed with `github_install.sh`, a Gitea release with `gitea_install.sh` (with the
-`-s` flag, see [Installing from Gitea](#installing-from-gitea-gitea_installsh)); they differ only
-in the API and download addresses, the flag set is the same.
+The GitHub template runs only on `github.com` (`if: github.server_url == 'https://github.com'`), the
+GitLab template only on `gitlab.com` (`$CI_SERVER_HOST == "gitlab.com"`): in mirrors on other
+instances the job is skipped. The Gitea templates have no such guard.
+
+The archive names, `SHA256SUMS` and the tag format are identical on all platforms. A GitHub
+release is installed with `github_install.sh`, a GitLab release with `gitlab_install.sh`, a Gitea
+release with `gitea_install.sh` (with the `-s` flag, see
+[Installing from Gitea](#installing-from-gitea-gitea_installsh)); they differ only in the API and
+download addresses, the flag set is the same.
 
 Cutting a new version: bump the version (`just bump-patch` / `bump-minor` / `bump-major` — see
 [CONVENTIONS.en.md](CONVENTIONS.en.md)), commit `versions.txt` and merge into the `main` / `master`
@@ -591,3 +667,19 @@ unavailable in an isolated network. In practice this means:
   token in the repository settings or substitute your own token with the `write:repository` scope.
 - **`runs-on: ubuntu-latest`** — this is a runner label. If your `act_runner` is registered with
   different labels, adjust `runs-on` accordingly.
+
+### Specifics of the GitLab template
+
+`workflows/release-gitlab.yml` (→ `.gitlab-ci.yml`) is a single `release` job:
+
+- **Trigger** — a push to the default branch on `gitlab.com`. The job reads `versions.txt` and exits
+  if the `vX.Y.Z` release already exists, so it works both when GitLab is the main platform and when
+  it is a mirror whose tags arrive from GitHub.
+- **Image** — `golang:1` for Go (`GOTOOLCHAIN=auto` fetches the version from `go.mod`), `alpine:3`
+  with `curl` for shell programs.
+- **Build** — the same four platforms, archive names, `-ldflags` and `SHA256SUMS` as on GitHub;
+  `origin` is `$CI_PROJECT_URL`, `channel` is `gitlab-release`.
+- **Publishing** — the files are uploaded into the project's generic package registry
+  (`/packages/generic/<name>/<version>/<file>`), then `POST /releases` with `ref=$CI_COMMIT_SHA`
+  creates the release (and the tag, if it does not exist yet) with release links to the files.
+- **Token** — `CI_JOB_TOKEN`, nothing needs to be configured.

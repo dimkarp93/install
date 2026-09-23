@@ -3,8 +3,8 @@
 *Languages: **English** · [Русский](CONVENTIONS.ru.md)*
 
 To make a program installable and updatable with the installers from this repository — both from
-GitHub Releases (`github_install.sh`) and locally from a working copy (`local_install.sh`) — it
-must satisfy the requirements described below.
+GitHub / GitLab / Gitea Releases (`github_install.sh`, `gitlab_install.sh`, `gitea_install.sh`) and
+locally from a working copy (`local_install.sh`) — it must satisfy the requirements described below.
 
 The program may be written in any language: the installers only care about a ready-made executable
 and about following the conventions for names, archives and versions.
@@ -51,7 +51,8 @@ There are no other mandatory files in the archive.
 ### 5. Local build (for `local_install.sh`)
 
 The repository provides a `just build` target (in a `Justfile`) **or** `make build` (in a
-`Makefile`) that puts the executable `<name>` (see item 1) into the **repository root**.
+`Makefile`) that puts the executable `<name>` (see item 1) into the **repository root**. A Go
+program is built from `vendor/` only (see [vendoring](#go-programs-vendoring-required)).
 `local_install.sh` uses this target to install the program locally, before a GitHub Release is
 published.
 
@@ -59,11 +60,28 @@ published.
 <repository-root>/<name>   <- the executable must end up here after just/make build
 ```
 
+## Go programs: layout (required)
+
+`package main` of a Go program lives in `cmd/<name>/`, where `<name>` is the executable name (item 1
+of the general requirements); the module root holds no `package main`:
+
+```
+<root>/go.mod             module github.com/owner/<name>
+<root>/cmd/<name>/main.go package main
+```
+
+The build recipes and the release workflows build exactly this package (`./cmd/<name>`). Files the
+program embeds with `//go:embed` live next to it, inside `cmd/<name>/`. The rest of the code lives in
+`internal/` or in other packages of the module.
+
+`go install` derives the executable name from the last segment of the **package** path, so
+`go install github.com/owner/<name>/cmd/<name>@vX.Y.Z` produces a binary with the correct name.
+
 ## Go programs: requirements for `go install` (optional)
 
 This section applies **only if** the program is meant to be installed with `go_install.sh` (that
 is, with the standard `go install`). It is not needed for installation via `github_install.sh`,
-`gitea_install.sh` and `local_install.sh`: the general requirements above are enough there, and the
+`gitlab_install.sh`, `gitea_install.sh` and `local_install.sh`: the general requirements above are enough there, and the
 language of the program does not matter.
 
 ### 1. Module path — a network address
@@ -79,24 +97,7 @@ A bare name (`module secrets`) makes `go install` impossible: `go` does not know
 module from. The last segment of the module path matches the repository name and the executable
 name (item 1 of the general requirements).
 
-### 2. Location of `package main` — `cmd/<name>/`
-
-`go install` derives the executable name from the last segment of the **package** path, not of the
-module. Hence the recommended layout:
-
-```
-<root>/go.mod            module github.com/owner/<name>
-<root>/cmd/<name>/main.go package main
-```
-
-Then `go install github.com/owner/<name>/cmd/<name>@vX.Y.Z` produces a binary with the correct
-name. `go_install.sh` tries this path first.
-
-Keeping `package main` in the module root also works (`go_install.sh` uses it as a fallback), but
-library code in such a module cannot be imported separately from `main` — if the module is also
-meant to be a library, use `cmd/<name>/`.
-
-### 3. Dependencies must be published
+### 2. Dependencies must be published
 
 `go install <package>@<version>` builds the module in isolation from the working copy:
 
@@ -104,10 +105,10 @@ meant to be a library, use `cmd/<name>/`.
 - `replace` in `go.mod` itself is not supported and causes an error.
 
 Therefore every internal dependency must be published as a separate module with a semver tag and be
-present in `go.sum`. Keep local `replace` directives for development in `go.work` only (which does
-not interfere with `go install`).
+present in `go.sum`. There are no local `replace` directives either: to use a change of a
+dependency, publish it and re-vendor (see [vendoring](#go-programs-vendoring-required)).
 
-### 4. Major versions
+### 3. Major versions
 
 Starting from `v2.0.0` the module path must carry a major-version suffix:
 
@@ -118,7 +119,7 @@ module github.com/owner/<name>/v2
 Otherwise `go install <module>@v2.0.0` fails. `go_install.sh` takes the suffix into account when
 computing the binary name.
 
-### 5. The version under `go install`
+### 4. The version under `go install`
 
 `versions.txt` remains the source of truth for the release workflows and for `local_install.sh`.
 But under `go install` the build runs without the `-ldflags` that the workflow sets, so
@@ -150,7 +151,7 @@ set by the workflow as before.
 
 ### Semantic release tag
 
-Releases are published through GitHub Releases or Gitea Releases. The tag of every release is
+Releases are published through GitHub Releases, GitLab Releases or Gitea Releases. The tag of every release is
 strictly `vMAJOR.MINOR.PATCH` (for example, `v1.2.3`).
 
 ### The version lives in `versions.txt`
@@ -259,7 +260,7 @@ channel=gitea-release
 
 The `origin`, `upstream` and `version` keys are always printed; `commit` and `channel` are omitted
 when unknown. `channel` describes how the executable was produced: `github-release`,
-`gitea-release`, `local` or `go-install`.
+`gitlab-release`, `gitea-release`, `local` or `go-install`.
 
 One flag holds the whole set, so new build attributes do not require a new flag every time — only a
 new line in the output.
@@ -295,8 +296,9 @@ The snippet keeps the port, so an ssh remote on a non-standard port (`ssh://git@
 yields `https://host:2222/o/r` — an ssh port is not an https port. For such a repository the origin
 is set explicitly in the build target instead of being derived from the remote.
 
-In CI no normalisation is needed: `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}` is already canonical.
-The release workflows from this repository build the value that way.
+In CI no normalisation is needed: `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}` (GitHub, Gitea) and
+`$CI_PROJECT_URL` (GitLab) are already canonical. The release workflows from this repository build
+the value that way.
 
 ### 4. The `upstream.txt` file
 
@@ -345,6 +347,56 @@ func Origin() string {
 The major-version suffix (`/v2`, `/v3`) is stripped so that the URL points at the repository rather
 than at a module path.
 
+## Go programs: vendoring (required)
+
+A Go program keeps its dependencies in `vendor/` and is built **only** from it — both in the release
+workflow and locally (`just build`, `make build`, `local_install.sh`). The build does not depend on a
+module proxy, on the module cache or on sibling working copies wired in through `go.work`, so it can
+be repeated in an isolated network.
+
+- If `go.mod` has `require` directives, `vendor/` with `vendor/modules.txt` is committed and matches
+  the result of `GOWORK=off go mod vendor`. A module without dependencies needs no `vendor/`.
+- `vendor/` is not listed in `.gitignore`; `.gitattributes` holds
+  `vendor/** linguist-generated=true -diff`.
+- The build file exports `GOWORK=off` and `GOFLAGS=-mod=vendor`, so that every recipe (`build`,
+  `test`, `vet`, `install`, ...) uses `vendor/` only:
+
+  ```just
+  export GOWORK := "off"
+  export GOFLAGS := "-mod=vendor"
+  ```
+
+  ```make
+  export GOWORK := off
+  export GOFLAGS := -mod=vendor
+  ```
+
+  `go.work` is not used: the repository does not keep one, and `GOWORK=off` also shields the build
+  from a `go.work` in a parent directory (Go looks for it up the tree). To use a change of a
+  dependency, publish it and run `just vendor`.
+- Formatting must not touch `vendor/`: use `go fmt ./...` rather than `gofmt -w .`.
+- The build file provides the `vendor` and `vendor-check` recipes. `vendor-check` looks at
+  `git status`, not only at `git diff`, so that files missing from the committed `vendor/` are caught
+  too:
+
+```just
+vendor:
+    GOWORK=off go mod tidy
+    GOWORK=off go mod vendor
+
+vendor-check:
+    GOWORK=off go mod vendor
+    test -z "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)"
+```
+
+After `go get` run `just vendor`: otherwise the build fails with "inconsistent vendoring". The
+release workflows run the same check before building (`GOWORK=off`, `GOFLAGS=-mod=vendor`), and
+`check_install.sh` fails a repository that does not follow this section.
+
+Vendoring does not lift the requirements of the `go install` section: `go install` ignores
+`vendor/`, so dependencies are still published as modules with semver tags. The code in `vendor/` is
+redistributed together with the repository — the licenses of the dependencies must allow that.
+
 ## Recommendations
 
 ### Static build
@@ -375,8 +427,30 @@ checksums only within one channel.
 
 ### Idempotent CI release
 
-The workflow must check whether the tag exists and skip the build if it already does. This makes
-pushing to `master` again safe.
+If the release for the tag already exists, the workflow skips the build. This makes pushing to
+`master` again safe, and it also covers platforms where the tag arrives together with a mirror
+sync. The GitHub and Gitea templates check the tag, the GitLab template checks the release.
+
+### The release workflow runs only on its own public domain
+
+The GitHub template runs only on `github.com`, the GitLab template only on `gitlab.com`:
+
+```yaml
+# .github/workflows/release.yml
+jobs:
+  release:
+    if: github.server_url == 'https://github.com'
+
+# .gitlab-ci.yml
+release:
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+```
+
+In mirrors on other instances (a private GitHub Enterprise, an internal GitLab, a Gitea reading
+`.github/workflows`) the job is skipped. Such mirrors build releases with their own means; these
+conventions do not regulate that. `check_install.sh` fails a GitHub / GitLab release workflow
+without the guard.
 
 ### Reusable workflow
 
@@ -385,13 +459,32 @@ executable name (from the repository name), building for four platforms, generat
 idempotency.
 
 - GitHub Actions: `workflows/release.yml` → `.github/workflows/release.yml`
+- GitLab CI: `workflows/release-gitlab.yml` → `.gitlab-ci.yml`
 - Gitea Actions: `workflows/release-gitea.yml` → `.gitea/workflows/release.yml`
 
+For shell programs: `release-sh.yml`, `release-sh-gitlab.yml`, `release-sh-gitea.yml`.
+
 The templates are interchangeable: the archive names, `SHA256SUMS` and the `vX.Y.Z` tag format are
-identical, so a release from either platform is installed by the very same `github_install.sh`. The
+identical, so the installers of all platforms work the same way. The GitLab template uploads the
+archives into the project's generic package registry and attaches them to the release as release
+links (not as attachments); on push to the default branch it creates the release and, if the tag has
+not arrived from a mirror yet, the tag too. The
 Gitea template uses no external actions (checkout, installing Go and publishing the release are
 shell `run:` steps, the release is created through the Gitea API), so it also works where the
 runner cannot download actions from github.com.
+
+### Installer sources
+
+- `github_install.sh` takes the instance from `-s` / `GITHUB_URL` (default `https://github.com`), the
+  API from `GITHUB_API_URL` (default `https://api.github.com`, for other instances
+  `<GITHUB_URL>/api/v3`), the token from `GITHUB_TOKEN`;
+- `gitlab_install.sh` takes the instance from `-s` / `GITLAB_URL` (default `https://gitlab.com`), the
+  token from `GITLAB_TOKEN` (scope `read_api`);
+- `gitea_install.sh` takes the instance from `-s` / `GITEA_URL`, the token from `GITEA_TOKEN`;
+- `go_install.sh` always installs from public `github.com` through the standard Go module mechanism
+  and ignores `GITHUB_URL` / `GITLAB_URL`: `go install` finds a module by its path, not by a URL, so
+  installing from a mirror would require redirecting git and resolving the checksum database. Use the
+  release installers for mirrors.
 
 ### Scaffolding and checking
 
@@ -404,9 +497,13 @@ init_install.sh --lang sh <name>
 ```
 
 It writes `versions.txt`, the `justfile` with the `build` / `bump-*` / `release` recipes,
-`.gitignore`, the release workflow and a skeleton with `--version` / `--origin` / `--buildinfo`
-(for Go — through `install-libs/buildinfo`).
+`.gitignore`, the release workflows (`--ci github,gitlab,gitea`, `all`, `none`) and a skeleton with
+`--version` / `--origin` / `--buildinfo` (for Go — through `install-libs/buildinfo`). For Go it
+also fills `vendor/`, `.gitattributes`, the `GOWORK` / `GOFLAGS` exports and the `vendor` /
+`vendor-check` recipes.
 
-An existing repository is checked by `check_install.sh` (with `--build` it also builds the binary
-and inspects the output of the flags), and `check_install.sh --fix` adds the missing pieces:
-`versions.txt`, `.gitignore`, the `bump-*` recipes and the release workflow.
+An existing repository is checked by `check_install.sh` (with `--build` it also builds the binary,
+inspects the output of the flags and checks that `vendor/` is consistent), and
+`check_install.sh --fix` adds the missing pieces: `versions.txt`, `.gitignore`, the `bump-*` recipes,
+the release workflow and, for Go, `vendor/`, `.gitattributes`, the `GOWORK` / `GOFLAGS` exports and
+the `vendor-*` recipes (a `Makefile` gets a hint instead).

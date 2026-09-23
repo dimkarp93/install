@@ -22,6 +22,10 @@ CONVENTIONS.md: network module path, published dependencies, no replace in go.mo
 If Go is missing or the program is not written in Go, use github_install.sh or
 gitea_install.sh.
 
+Always installs from public github.com through the Go module proxy:
+GITHUB_URL and GITLAB_URL are not used. To install from a mirror or another
+instance, use github_install.sh / gitlab_install.sh.
+
 Flags -D, -F, -i, -u are not supported: 'go install' has no intermediate archive.
 Use github_install.sh / gitea_install.sh for those scenarios.
 
@@ -66,6 +70,23 @@ if [ -z "$MODULE" ]; then
 fi
 
 MODULE=${MODULE%/}
+
+if [ -n "${GITHUB_URL:-}" ]; then
+    _gh="$GITHUB_URL"
+    case "$_gh" in
+        http://*|https://*) ;;
+        *) _gh="https://$_gh" ;;
+    esac
+    while :; do
+        case "$_gh" in
+            */) _gh="${_gh%/}" ;;
+            *) break ;;
+        esac
+    done
+    if [ "$_gh" != "https://github.com" ]; then
+        echo "Warning: GITHUB_URL=$GITHUB_URL is ignored - $(basename "$0") always installs from public github.com (use github_install.sh for other instances)" >&2
+    fi
+fi
 
 if ! command -v go >/dev/null 2>&1; then
     echo "Error: 'go' not found in PATH - go_install.sh requires an installed Go toolchain." >&2
