@@ -3,14 +3,14 @@ set -eu
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [FLAGS] <owner/repository> [binary-name] [version]
+Usage: $(basename "$0") [FLAGS] <namespace/project> [binary-name] [version]
    or: $(basename "$0") -F <archive.tar.gz> [binary-name]
 
-Downloads and installs a program from GitHub Releases.
+Downloads and installs a program from GitLab Releases.
 
-  -s, --server     GitHub instance address, e.g. https://github.example.com
-                   (the scheme may be omitted: github.example.com becomes https://);
-                   if not given, taken from GITHUB_URL, otherwise https://github.com
+  -s, --server     GitLab instance address, e.g. https://gitlab.example.com
+                   (the scheme may be omitted: gitlab.example.com becomes https://);
+                   if not given, taken from GITLAB_URL, otherwise https://gitlab.com
   -i               pick the version interactively from a list
   -l, --list       print the available versions and exit
   -u, --update     install only if the available version is newer than the current one
@@ -21,17 +21,15 @@ Downloads and installs a program from GitHub Releases.
   --user-only      install into ~/.local/bin (no sudo); default is /usr/local/bin
   -h, --help       show this help
 
-  <owner/repository>  e.g.: owner/repo
-  [binary-name]       name of the executable (default: repository name)
+  <namespace/project> e.g.: owner/repo or group/subgroup/repo
+  [binary-name]       name of the executable (default: project name)
   [version]           semver like 1.2.3 or v1.2.3 (default: latest)
 
 Environment variables:
-  GITHUB_URL      GitHub instance address (alternative to the -s flag);
-                  default: https://github.com
-  GITHUB_API_URL  GitHub API address; default: https://api.github.com for
-                  https://github.com, otherwise <GITHUB_URL>/api/v3 (GitHub Enterprise Server)
-  GITHUB_TOKEN    GitHub token: lifts the 60 req/h limit and allows
-                  installing from private repositories
+  GITLAB_URL      GitLab instance address (alternative to the -s flag);
+                  default: https://gitlab.com
+  GITLAB_TOKEN    GitLab token with the read_api scope: required to install
+                  from private projects
 EOF
 }
 
@@ -41,7 +39,7 @@ UPDATE_ONLY=0
 DOWNLOAD_ONLY=0
 USER_ONLY=0
 FROM_FILE=""
-SERVER="${GITHUB_URL:-}"
+SERVER="${GITLAB_URL:-}"
 REPO=""
 BIN=""
 VERSION=""
@@ -95,13 +93,10 @@ case "$(uname -m)" in
     *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-# --- argument validation ---
-
 if [ -n "$FROM_FILE" ]; then
     if [ ! -f "$FROM_FILE" ]; then
         echo "File not found: $FROM_FILE" >&2; exit 1
     fi
-    # the first positional (REPO) without '/' is treated as the binary name
     if [ -n "$REPO" ] && [ -z "$BIN" ]; then
         case "$REPO" in
             */*) ;;
@@ -118,54 +113,74 @@ if [ -n "$FROM_FILE" ]; then
         fi
     fi
 else
+    SERVER="${SERVER:-https://gitlab.com}"
+    case "$SERVER" in
+        http://*|https://*) ;;
+        *) SERVER="https://$SERVER" ;;
+    esac
+    while :; do
+        case "$SERVER" in
+            */) SERVER="${SERVER%/}" ;;
+            *) break ;;
+        esac
+    done
+
     if [ -z "$REPO" ]; then
-        echo "Error: specify owner/repository" >&2
+        echo "Error: specify namespace/project" >&2
         usage >&2; exit 1
     fi
     case "$REPO" in
         */*)  ;;
-        *) echo "Error: the format must be owner/repository (e.g. dimkarp93/envs)" >&2; exit 1 ;;
+        *) echo "Error: the format must be namespace/project (e.g. dimkarp93/envs)" >&2; exit 1 ;;
     esac
+    PROJECT_API="${SERVER}/api/v4/projects/$(printf '%s' "$REPO" | sed 's|/|%2F|g')"
 fi
-
-SERVER="${SERVER:-https://github.com}"
-case "$SERVER" in
-    http://*|https://*) ;;
-    *) SERVER="https://$SERVER" ;;
-esac
-while :; do
-    case "$SERVER" in
-        */) SERVER="${SERVER%/}" ;;
-        *) break ;;
-    esac
-done
-
-API="${GITHUB_API_URL:-}"
-if [ -z "$API" ]; then
-    if [ "$SERVER" = "https://github.com" ]; then
-        API="https://api.github.com"
-    else
-        API="$SERVER/api/v3"
-    fi
-fi
-API="${API%/}"
-
-# --- helpers ---
 
 api_get() {
     _url="$1"
+    _quiet="${2:-0}"
     _out=$(mktemp)
-    _http=$(curl -o "$_out" -w "%{http_code}" -sSL \
-        ${GITHUB_TOKEN:+-H "Authorization: token $GITHUB_TOKEN"} \
-        "$_url" 2>/dev/null) || true
+    if [ -n "${GITLAB_TOKEN:-}" ]; then
+        _http=$(curl -o "$_out" -w "%{http_code}" -sSL \
+            -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$_url" 2>/dev/null) || true
+    else
+        _http=$(curl -o "$_out" -w "%{http_code}" -sSL "$_url" 2>/dev/null) || true
+    fi
     if [ "$_http" != "200" ]; then
-        cat "$_out" >&2 2>/dev/null || true
         rm -f "$_out"
-        echo "GitHub API returned HTTP $_http for $_url" >&2
+        if [ "$_quiet" != "1" ]; then
+            echo "GitLab API returned HTTP $_http for $_url" >&2
+            if [ "$_http" = "401" ] || [ "$_http" = "403" ] || [ "$_http" = "404" ]; then
+                if [ -z "${GITLAB_TOKEN:-}" ]; then
+                    echo "If the project is private, set GITLAB_TOKEN (read_api scope)" >&2
+                else
+                    echo "Check that GITLAB_TOKEN is valid and has the read_api scope" >&2
+                fi
+            fi
+        fi
         return 1
     fi
     cat "$_out"
     rm -f "$_out"
+}
+
+repo_exists() {
+    api_get "${PROJECT_API}" 1 >/dev/null 2>&1
+}
+
+fail_no_release() {
+    if repo_exists; then
+        echo "Project ${REPO} on ${SERVER} has no published releases." >&2
+        echo "Check the list: $(basename "$0") -s $SERVER -l $REPO" >&2
+        echo "Note: git tags without a created release cannot be installed." >&2
+    else
+        echo "Project ${REPO} was not found or is not accessible on ${SERVER}." >&2
+        if [ -z "${GITLAB_TOKEN:-}" ]; then
+            echo "If the project is private, set GITLAB_TOKEN (read_api scope)" >&2
+        else
+            echo "Check that GITLAB_TOKEN is valid and has the read_api scope" >&2
+        fi
+    fi
 }
 
 download_file() {
@@ -177,10 +192,9 @@ download_file() {
     else
         _progress="-sS"
     fi
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
+    if [ -n "${GITLAB_TOKEN:-}" ]; then
         curl -fL $_progress \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/octet-stream" \
+            -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
             -o "$_dest" "$_url"
     else
         curl -fL $_progress -o "$_dest" "$_url"
@@ -209,48 +223,48 @@ check_sha256() {
 }
 
 list_versions() {
-    _json=$(api_get "${API}/repos/${REPO}/releases?per_page=100") || return 1
+    _json=$(api_get "${PROJECT_API}/releases?per_page=100") || return 1
     echo "$_json" \
-        | grep '"tag_name":' \
-        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' \
+        | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/'
 }
 
 get_release() {
     _tag="${1:-}"
+    _quiet="${2:-0}"
     if [ -z "$_tag" ]; then
-        api_get "${API}/repos/${REPO}/releases/latest"
+        api_get "${PROJECT_API}/releases/permalink/latest" "$_quiet"
     else
-        api_get "${API}/repos/${REPO}/releases/tags/${_tag}"
+        api_get "${PROJECT_API}/releases/${_tag}" "$_quiet"
     fi
 }
 
 discover_bin() {
-    echo "$1" | grep '"name":' \
-        | grep "\"[^\"]*-${OS}-${ARCH}\.tar\.gz\"" \
-        | sed -E 's/.*"name": *"([^"]+)".*/\1/' \
+    echo "$1" \
+        | grep -o '"name":[[:space:]]*"[^"]*"' \
+        | grep -o "\"[^\"]*-${OS}-${ARCH}\.tar\.gz\"" \
+        | tr -d '"' \
         | head -1 \
         | sed -E "s/-${OS}-${ARCH}\\.tar\\.gz\$//"
 }
 
-# Extracts the asset API URL (<API>/repos/.../releases/assets/<id>)
-# by asset name from the release JSON. Needed for private repositories: the
-# browser_download_url link (github.com/.../releases/download/...) does not
-# accept the token and returns 404, while the API endpoint with
-# Accept: application/octet-stream does. This relies on GitHub returning one
-# field per line, with the asset "url" field preceding its "name".
-asset_api_url() {
-    echo "$RELEASE_JSON" | awk -v target="$1" '
-        /"url":/  { url = $0 }
-        /"name":/ {
-            name = $0
-            sub(/.*"name": *"/, "", name); sub(/".*/, "", name)
-            if (name == target) {
-                sub(/.*"url": *"/, "", url); sub(/".*/, "", url)
-                print url
-                exit
-            }
-        }
-    '
+asset_url() {
+    _link=$(printf '%s' "$RELEASE_JSON" \
+        | tr -d '\n' \
+        | tr '{}' '\n\n' \
+        | grep "\"name\":[[:space:]]*\"$1\"" \
+        | head -1)
+    _u=$(printf '%s' "$_link" \
+        | grep -o '"direct_asset_url":[[:space:]]*"[^"]*"' \
+        | sed -E 's/.*"direct_asset_url":[[:space:]]*"([^"]+)".*/\1/' \
+        | head -1)
+    if [ -z "$_u" ]; then
+        _u=$(printf '%s' "$_link" \
+            | grep -o '"url":[[:space:]]*"[^"]*"' \
+            | sed -E 's/.*"url":[[:space:]]*"([^"]+)".*/\1/' \
+            | head -1)
+    fi
+    printf '%s' "$_u"
 }
 
 do_install() {
@@ -304,18 +318,14 @@ extract_bin() {
     fi
 }
 
-# --- mode: list versions only ---
-
 if [ "$LIST_ONLY" = "1" ]; then
     VERSIONS=$(list_versions) || exit 1
     if [ -z "$VERSIONS" ]; then
-        echo "Repository ${REPO} has no releases" >&2; exit 1
+        echo "Project ${REPO} has no releases" >&2; exit 1
     fi
     echo "$VERSIONS"
     exit 0
 fi
-
-# --- mode: install from a local archive ---
 
 if [ -n "$FROM_FILE" ]; then
     ARCHIVE_PATH=$(cd "$(dirname "$FROM_FILE")" && pwd)/$(basename "$FROM_FILE")
@@ -339,8 +349,6 @@ if [ -n "$FROM_FILE" ]; then
     do_install "$BIN_PATH" "$BIN_VER"
     exit 0
 fi
-
-# --- tag resolution (network modes) ---
 
 RELEASE_JSON=""
 
@@ -370,9 +378,12 @@ if [ "$INTERACTIVE" = "1" ]; then
             fi ;;
     esac
 elif [ -z "$VERSION" ]; then
-    RELEASE_JSON=$(get_release) || exit 1
-    TAG=$(echo "$RELEASE_JSON" | grep '"tag_name":' | head -1 \
-        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+    if ! RELEASE_JSON=$(get_release "" 1); then
+        fail_no_release
+        exit 1
+    fi
+    TAG=$(echo "$RELEASE_JSON" | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
     if [ -z "$TAG" ]; then
         echo "Failed to determine the latest version" >&2; exit 1
     fi
@@ -383,8 +394,6 @@ else
     esac
 fi
 
-# --- auto-detect the binary name from the release assets ---
-
 if [ -z "$BIN" ]; then
     if [ -z "$RELEASE_JSON" ]; then
         RELEASE_JSON=$(get_release "$TAG") || exit 1
@@ -392,33 +401,26 @@ if [ -z "$BIN" ]; then
     BIN=$(discover_bin "$RELEASE_JSON")
     if [ -z "$BIN" ]; then
         echo "No asset *-${OS}-${ARCH}.tar.gz found in release ${TAG}" >&2
-        echo "Specify the binary name explicitly: $(basename "$0") $REPO <binary-name>" >&2
+        echo "Specify the binary name explicitly: $(basename "$0") -s $SERVER $REPO <binary-name>" >&2
         exit 1
     fi
 fi
 
 ARCHIVE="${BIN}-${OS}-${ARCH}.tar.gz"
 
-# For private repositories the direct browser_download_url does not accept the
-# token, so we download via the API asset endpoint. Public ones keep the plain link.
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-    if [ -z "$RELEASE_JSON" ]; then
-        RELEASE_JSON=$(get_release "$TAG") || exit 1
-    fi
-    ARCHIVE_URL=$(asset_api_url "$ARCHIVE")
-    SUMS_URL=$(asset_api_url "SHA256SUMS")
-    if [ -z "$ARCHIVE_URL" ]; then
-        echo "Asset $ARCHIVE not found in release ${TAG}" >&2; exit 1
-    fi
-    if [ -z "$SUMS_URL" ]; then
-        echo "Asset SHA256SUMS not found in release ${TAG}" >&2; exit 1
-    fi
-else
-    ARCHIVE_URL="${SERVER}/${REPO}/releases/download/${TAG}/${ARCHIVE}"
-    SUMS_URL="${SERVER}/${REPO}/releases/download/${TAG}/SHA256SUMS"
+if [ -z "$RELEASE_JSON" ]; then
+    RELEASE_JSON=$(get_release "$TAG") || exit 1
 fi
 
-# --- mode: download only ---
+ARCHIVE_URL=$(asset_url "$ARCHIVE")
+SUMS_URL=$(asset_url "SHA256SUMS")
+
+if [ -z "$ARCHIVE_URL" ]; then
+    echo "Asset $ARCHIVE not found in release ${TAG}" >&2; exit 1
+fi
+if [ -z "$SUMS_URL" ]; then
+    echo "Asset SHA256SUMS not found in release ${TAG}" >&2; exit 1
+fi
 
 if [ "$DOWNLOAD_ONLY" = "1" ]; then
     DEST_DIR="$(pwd)"
@@ -439,13 +441,10 @@ if [ "$DOWNLOAD_ONLY" = "1" ]; then
         exit 1
     }
 
-    # the only stdout output is the archive path (everything else went to stderr)
     DEST_ABS=$(cd "$DEST_DIR" && pwd)/$ARCHIVE
     echo "$DEST_ABS"
     exit 0
 fi
-
-# --- mode: full install ---
 
 if [ "$UPDATE_ONLY" = "1" ]; then
     CURRENT=""

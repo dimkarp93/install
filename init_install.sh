@@ -7,14 +7,16 @@ Usage: $(basename "$0") [FLAGS] <name|path>
 
 Creates a new repository that follows the conventions from CONVENTIONS.md:
 versions.txt, a build file with build/bump-*/release recipes, --version /
---origin / --buildinfo flags, .gitignore and a release workflow.
+--origin / --buildinfo flags, .gitignore and a release workflow. Go
+programs get their dependencies in vendor/ and are built only from it.
 
   --lang go|sh          language of the skeleton (default: go)
   --owner OWNER         repository owner (required for --lang go)
   --host HOST           repository host (default: github.com)
   --upstream URL        write upstream.txt with the canonical repository URL
-  --layout cmd|root     go: cmd/<name>/main.go (default) or main.go in the root
-  --ci github|gitea|both|none   which release workflow to add (default: github)
+  --ci LIST             which release workflows to add: a comma-separated list of
+                        github, gitea, gitlab; or all, none
+                        (default: github)
   --remote URL          git remote add origin URL
   --no-git              do not run git init and do not create the first commit
   --force               fill an existing directory (existing files are kept)
@@ -25,8 +27,9 @@ versions.txt, a build file with build/bump-*/release recipes, --version /
                relative path - resolved against the current directory.
 
 Templates for --emit: justfile-go, justfile-sh, main-go, source-sh,
-gitignore-go, gitignore-sh, readme, bump-recipes, workflow-go-github,
-workflow-go-gitea, workflow-sh-github, workflow-sh-gitea.
+gitignore-go, gitignore-sh, readme, bump-recipes, vendor-env,
+vendor-recipes, gitattributes-vendor, workflow-go-github, workflow-go-gitea, workflow-go-gitlab,
+workflow-sh-github, workflow-sh-gitea, workflow-sh-gitlab.
 EOF
 }
 
@@ -34,7 +37,6 @@ PROG_LANG="go"
 OWNER=""
 HOST="github.com"
 UPSTREAM_URL=""
-LAYOUT="cmd"
 CI="github"
 REMOTE_URL=""
 DO_GIT=1
@@ -53,7 +55,6 @@ while [ $# -gt 0 ]; do
         --owner)    need_value "$1" $#; OWNER="$2"; shift 2 ;;
         --host)     need_value "$1" $#; HOST="$2"; shift 2 ;;
         --upstream) need_value "$1" $#; UPSTREAM_URL="$2"; shift 2 ;;
-        --layout)   need_value "$1" $#; LAYOUT="$2"; shift 2 ;;
         --ci)       need_value "$1" $#; CI="$2"; shift 2 ;;
         --remote)   need_value "$1" $#; REMOTE_URL="$2"; shift 2 ;;
         --emit)     need_value "$1" $#; EMIT="$2"; shift 2 ;;
@@ -74,19 +75,29 @@ case "$PROG_LANG" in
     go|sh) ;;
     *) echo "Unknown --lang: $PROG_LANG (go|sh)" >&2; exit 1 ;;
 esac
-case "$LAYOUT" in
-    cmd|root) ;;
-    *) echo "Unknown --layout: $LAYOUT (cmd|root)" >&2; exit 1 ;;
-esac
 case "$CI" in
-    github|gitea|both|none) ;;
-    *) echo "Unknown --ci: $CI (github|gitea|both|none)" >&2; exit 1 ;;
+    all)  CI="github,gitea,gitlab" ;;
+    none) CI="" ;;
 esac
+CI_GITHUB=0
+CI_GITEA=0
+CI_GITLAB=0
+for _ci in $(printf '%s' "$CI" | tr ',' ' '); do
+    case "$_ci" in
+        github) CI_GITHUB=1 ;;
+        gitea)  CI_GITEA=1 ;;
+        gitlab) CI_GITLAB=1 ;;
+        *) echo "Unknown --ci: $_ci (github|gitea|gitlab|all|none)" >&2; exit 1 ;;
+    esac
+done
 
 tpl_justfile_go() {
     cat <<'EOT'
 bin := "__NAME__"
 version_file := "versions.txt"
+EOT
+    tpl_vendor_env
+    cat <<'EOT'
 
 _default:
     @just --list
@@ -116,7 +127,7 @@ vet:
     go vet ./...
 
 fmt:
-    gofmt -l -w .
+    go fmt ./...
 
 check: vet test
 
@@ -135,6 +146,8 @@ uninstall:
     rm -f "$HOME/.local/bin/{{bin}}"
 
 EOT
+    tpl_vendor_recipes
+    echo
     tpl_bump_recipes
     tpl_release_recipe
 }
@@ -439,7 +452,11 @@ permissions:
 
 jobs:
   release:
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+      GOFLAGS: -mod=vendor
     steps:
       - uses: actions/checkout@v4
         with:
@@ -487,6 +504,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Check vendor
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: |
+          go mod vendor
+          if [ -n "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)" ]; then
+            echo "vendor/ does not match go.mod - run: just vendor" >&2
+            exit 1
+          fi
+
       - name: Run tests
         if: steps.tagcheck.outputs.exists == 'false'
         run: go test ./...
@@ -503,11 +529,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          if [ -d "cmd/${BIN}" ]; then
-            pkg="./cmd/${BIN}"
-          else
-            pkg="."
-          fi
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${target%/*}
             arch=${target#*/}
@@ -517,7 +538,7 @@ jobs:
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
               go build -trimpath \
                 -ldflags="-s -w -X main.version=${VERSION} -X main.origin=${ORIGIN} -X main.upstream=${UPSTREAM} -X main.commit=${COMMIT} -X main.channel=${CHANNEL}" \
-                -o "$tmp/${BIN}" "$pkg"
+                -o "$tmp/${BIN}" "./cmd/${BIN}"
             chmod +x "$tmp/${BIN}"
             tar -C "$tmp" -czf "$out" "${BIN}"
             rm -rf "$tmp"
@@ -659,11 +680,6 @@ jobs:
         run: |
           set -eu
           mkdir -p dist
-          if [ -d "cmd/${BIN}" ]; then
-            pkg="./cmd/${BIN}"
-          else
-            pkg="."
-          fi
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${target%/*}
             arch=${target#*/}
@@ -673,7 +689,7 @@ jobs:
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
               go build -trimpath \
                 -ldflags="-s -w -X main.version=${VERSION} -X main.origin=${ORIGIN} -X main.upstream=${UPSTREAM} -X main.commit=${COMMIT} -X main.channel=${CHANNEL}" \
-                -o "$tmp/${BIN}" "$pkg"
+                -o "$tmp/${BIN}" "./cmd/${BIN}"
             chmod +x "$tmp/${BIN}"
             tar -C "$tmp" -czf "$out" "${BIN}"
             rm -rf "$tmp"
@@ -727,6 +743,7 @@ permissions:
 
 jobs:
   release:
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -965,12 +982,209 @@ jobs:
 EOT
 }
 
+tpl_workflow_go_gitlab() {
+    cat <<'EOT'
+release:
+  image: golang:1
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  variables:
+    CGO_ENABLED: "0"
+    GOWORK: "off"
+    GOFLAGS: -mod=vendor
+    GOTOOLCHAIN: auto
+    CHANNEL: gitlab-release
+  script:
+    - |
+      set -eu
+      if [ ! -f versions.txt ]; then
+        echo "versions.txt not found" >&2
+        exit 1
+      fi
+      VERSION=$(tr -d '[:space:]' < versions.txt)
+      if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "versions.txt must contain semver X.Y.Z (got: '$VERSION')" >&2
+        exit 1
+      fi
+      TAG="v$VERSION"
+      BIN="$CI_PROJECT_NAME"
+      ORIGIN="${CI_PROJECT_URL%/}"
+      if [ -f upstream.txt ]; then
+        UPSTREAM=$(tr -d '[:space:]' < upstream.txt)
+      else
+        UPSTREAM="$ORIGIN"
+      fi
+      COMMIT=$(printf '%s' "$CI_COMMIT_SHA" | cut -c1-7)
+      API="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+
+      if curl -fsS -o /dev/null -H "JOB-TOKEN: $CI_JOB_TOKEN" "$API/releases/$TAG" 2>/dev/null; then
+        echo "Release $TAG already exists - skipping the release"
+        exit 0
+      fi
+
+      go mod vendor
+      if [ -n "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)" ]; then
+        echo "vendor/ does not match go.mod - run: just vendor" >&2
+        exit 1
+      fi
+
+      go test ./...
+
+      mkdir -p dist
+      for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+        os=${target%/*}
+        arch=${target#*/}
+        name="${BIN}-${os}-${arch}"
+        out="dist/${name}.tar.gz"
+        tmp=$(mktemp -d)
+        GOOS="$os" GOARCH="$arch" \
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${VERSION} -X main.origin=${ORIGIN} -X main.upstream=${UPSTREAM} -X main.commit=${COMMIT} -X main.channel=${CHANNEL}" \
+            -o "$tmp/${BIN}" "./cmd/${BIN}"
+        chmod +x "$tmp/${BIN}"
+        tar -C "$tmp" -czf "$out" "${BIN}"
+        rm -rf "$tmp"
+      done
+      (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+      ls -la dist
+
+      pkg_url="$API/packages/generic/${BIN}/${VERSION}"
+      links=""
+      for f in dist/*; do
+        file=$(basename "$f")
+        echo "Uploading $file"
+        curl -fsS -H "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" "$pkg_url/$file" >/dev/null
+        link=$(printf '{"name":"%s","url":"%s/%s","direct_asset_path":"/%s","link_type":"package"}' \
+          "$file" "$pkg_url" "$file" "$file")
+        links="${links:+$links,}$link"
+      done
+      body=$(printf '{"tag_name":"%s","ref":"%s","name":"%s","description":"Automated release %s from versions.txt","assets":{"links":[%s]}}' \
+        "$TAG" "$CI_COMMIT_SHA" "$TAG" "$TAG" "$links")
+      curl -fsS -X POST "$API/releases" \
+        -H "JOB-TOKEN: $CI_JOB_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$body" >/dev/null
+      echo "Release $TAG created"
+EOT
+}
+
+tpl_workflow_sh_gitlab() {
+    cat <<'EOT'
+release:
+  image: alpine:3
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  variables:
+    CHANNEL: gitlab-release
+  script:
+    - apk add --no-cache curl >/dev/null
+    - |
+      set -eu
+      if [ ! -f versions.txt ]; then
+        echo "versions.txt not found" >&2
+        exit 1
+      fi
+      VERSION=$(tr -d '[:space:]' < versions.txt)
+      if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "versions.txt must contain semver X.Y.Z (got: '$VERSION')" >&2
+        exit 1
+      fi
+      TAG="v$VERSION"
+      BIN="$CI_PROJECT_NAME"
+      if [ -f "${BIN}.sh" ]; then
+        SRC="${BIN}.sh"
+      elif [ -f "${BIN}-init.sh" ]; then
+        SRC="${BIN}-init.sh"
+      else
+        echo "source script not found: ${BIN}.sh or ${BIN}-init.sh" >&2
+        exit 1
+      fi
+      ORIGIN="${CI_PROJECT_URL%/}"
+      if [ -f upstream.txt ]; then
+        UPSTREAM=$(tr -d '[:space:]' < upstream.txt)
+      else
+        UPSTREAM="$ORIGIN"
+      fi
+      COMMIT=$(printf '%s' "$CI_COMMIT_SHA" | cut -c1-7)
+      API="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+
+      if curl -fsS -o /dev/null -H "JOB-TOKEN: $CI_JOB_TOKEN" "$API/releases/$TAG" 2>/dev/null; then
+        echo "Release $TAG already exists - skipping the release"
+        exit 0
+      fi
+
+      sh -n "$SRC"
+
+      mkdir -p dist
+      build=$(mktemp -d)
+      sed -e "s|^VERSION=\"dev\"$|VERSION=\"${VERSION}\"|" \
+          -e "s|^ORIGIN=\"\"$|ORIGIN=\"${ORIGIN}\"|" \
+          -e "s|^UPSTREAM=\"\"$|UPSTREAM=\"${UPSTREAM}\"|" \
+          -e "s|^COMMIT=\"\"$|COMMIT=\"${COMMIT}\"|" \
+          -e "s|^CHANNEL=\"\"$|CHANNEL=\"${CHANNEL}\"|" \
+          "$SRC" > "$build/${BIN}"
+      chmod +x "$build/${BIN}"
+      for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+        os=${target%/*}
+        arch=${target#*/}
+        tar -C "$build" -czf "dist/${BIN}-${os}-${arch}.tar.gz" "${BIN}"
+      done
+      rm -rf "$build"
+      (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+      ls -la dist
+
+      pkg_url="$API/packages/generic/${BIN}/${VERSION}"
+      links=""
+      for f in dist/*; do
+        file=$(basename "$f")
+        echo "Uploading $file"
+        curl -fsS -H "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" "$pkg_url/$file" >/dev/null
+        link=$(printf '{"name":"%s","url":"%s/%s","direct_asset_path":"/%s","link_type":"package"}' \
+          "$file" "$pkg_url" "$file" "$file")
+        links="${links:+$links,}$link"
+      done
+      body=$(printf '{"tag_name":"%s","ref":"%s","name":"%s","description":"Automated release %s from versions.txt","assets":{"links":[%s]}}' \
+        "$TAG" "$CI_COMMIT_SHA" "$TAG" "$TAG" "$links")
+      curl -fsS -X POST "$API/releases" \
+        -H "JOB-TOKEN: $CI_JOB_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$body" >/dev/null
+      echo "Release $TAG created"
+EOT
+}
+
+tpl_vendor_env() {
+    cat <<'EOT'
+export GOWORK := "off"
+export GOFLAGS := "-mod=vendor"
+EOT
+}
+
+tpl_vendor_recipes() {
+    cat <<'EOT'
+vendor:
+    GOWORK=off go mod tidy
+    GOWORK=off go mod vendor
+
+vendor-check:
+    GOWORK=off go mod vendor
+    test -z "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)"
+EOT
+}
+
+tpl_gitattributes_vendor() {
+    cat <<'EOT'
+vendor/** linguist-generated=true -diff
+EOT
+}
+
 emit() {
     _fn="tpl_$(printf '%s' "$1" | tr '-' '_')"
     case "$_fn" in
         tpl_justfile_go|tpl_justfile_sh|tpl_main_go|tpl_source_sh|tpl_gitignore_go|\
 tpl_gitignore_sh|tpl_readme|tpl_bump_recipes|tpl_release_recipe|\
-tpl_workflow_go_github|tpl_workflow_go_gitea|tpl_workflow_sh_github|tpl_workflow_sh_gitea) ;;
+tpl_workflow_go_github|tpl_workflow_go_gitea|tpl_workflow_sh_github|tpl_workflow_sh_gitea|\
+tpl_workflow_go_gitlab|tpl_workflow_sh_gitlab|tpl_vendor_env|tpl_vendor_recipes|tpl_gitattributes_vendor) ;;
         *) echo "Unknown template: $1" >&2; usage >&2; exit 1 ;;
     esac
     "$_fn"
@@ -1012,11 +1226,7 @@ if [ -d "$DIR" ] && [ "$FORCE" = "0" ]; then
 fi
 
 SRC="${NAME}.sh"
-if [ "$LAYOUT" = "cmd" ]; then
-    PKG="./cmd/${NAME}"
-else
-    PKG="."
-fi
+PKG="./cmd/${NAME}"
 
 MODULE=""
 if [ "$PROG_LANG" = "go" ]; then
@@ -1082,11 +1292,7 @@ write_file README.md readme
 if [ "$PROG_LANG" = "go" ]; then
     write_file .gitignore gitignore-go
     write_file justfile justfile-go
-    if [ "$LAYOUT" = "cmd" ]; then
-        write_file "cmd/${NAME}/main.go" main-go
-    else
-        write_file main.go main-go
-    fi
+    write_file "cmd/${NAME}/main.go" main-go
     write_text go.mod "module ${MODULE}
 
 go $(go_directive)"
@@ -1097,24 +1303,19 @@ else
     chmod 0755 "$DIR/$SRC"
 fi
 
-case "$CI" in
-    github|both)
-        if [ "$PROG_LANG" = "go" ]; then
-            write_file .github/workflows/release.yml workflow-go-github
-        else
-            write_file .github/workflows/release.yml workflow-sh-github
-        fi
-        ;;
-esac
-case "$CI" in
-    gitea|both)
-        if [ "$PROG_LANG" = "go" ]; then
-            write_file .gitea/workflows/release.yml workflow-go-gitea
-        else
-            write_file .gitea/workflows/release.yml workflow-sh-gitea
-        fi
-        ;;
-esac
+if [ "$CI_GITHUB" = "1" ]; then
+    write_file .github/workflows/release.yml "workflow-${PROG_LANG}-github"
+fi
+if [ "$CI_GITEA" = "1" ]; then
+    write_file .gitea/workflows/release.yml "workflow-${PROG_LANG}-gitea"
+fi
+if [ "$CI_GITLAB" = "1" ]; then
+    write_file .gitlab-ci.yml "workflow-${PROG_LANG}-gitlab"
+fi
+
+if [ "$PROG_LANG" = "go" ]; then
+    write_file .gitattributes gitattributes-vendor
+fi
 
 if [ "$PROG_LANG" = "go" ] && command -v go >/dev/null 2>&1; then
     echo
@@ -1124,6 +1325,11 @@ if [ "$PROG_LANG" = "go" ] && command -v go >/dev/null 2>&1; then
         echo "  [OK]   github.com/dimkarp93/install-libs/buildinfo"
     else
         echo "  [WARN] failed to fetch install-libs - run 'go get github.com/dimkarp93/install-libs/buildinfo && go mod tidy' when the network is available"
+    fi
+    if (cd "$DIR" && GOWORK=off go mod vendor >/dev/null 2>&1); then
+        echo "  [OK]   vendor/"
+    else
+        echo "  [WARN] go mod vendor failed - run 'just vendor' when the network is available"
     fi
 fi
 

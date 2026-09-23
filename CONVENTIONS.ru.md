@@ -3,8 +3,9 @@
 *Языки: **Русский** · [English](CONVENTIONS.en.md)*
 
 Чтобы программу можно было установить и обновить через установщики этого репозитория —
-как из GitHub Releases (`github_install.sh`), так и локально из рабочей копии
-(`local_install.sh`) — она должна удовлетворять описанным ниже требованиям.
+как из GitHub / GitLab / Gitea Releases (`github_install.sh`, `gitlab_install.sh`,
+`gitea_install.sh`), так и локально из рабочей копии (`local_install.sh`) — она должна
+удовлетворять описанным ниже требованиям.
 
 Программа может быть написана на любом языке: установщикам важны лишь готовый исполняемый
 файл и соблюдение конвенций об именах, архивах и версиях.
@@ -52,7 +53,8 @@
 ### 5. Локальная сборка (для `local_install.sh`)
 
 В репозитории есть цель `just build` (в `Justfile`) **или** `make build` (в `Makefile`),
-которая помещает исполняемый файл `<имя>` (см. п. 1) в **корень репозитория**.
+которая помещает исполняемый файл `<имя>` (см. п. 1) в **корень репозитория**. Go-программа
+собирается только из `vendor/` (см. [vendoring](#go-программы-vendoring-обязательно)).
 `local_install.sh` использует эту цель для установки программы локально, до публикации
 GitHub Release.
 
@@ -60,11 +62,28 @@ GitHub Release.
 <корень-репозитория>/<имя>   ← исполняемый файл должен оказаться здесь после just/make build
 ```
 
+## Go-программы: раскладка (обязательно)
+
+`package main` Go-программы лежит в `cmd/<имя>/`, где `<имя>` — имя исполняемого файла (п. 1 общих
+требований); в корне модуля `package main` нет:
+
+```
+<корень>/go.mod             module github.com/owner/<имя>
+<корень>/cmd/<имя>/main.go  package main
+```
+
+Рецепты сборки и release-workflow собирают именно этот пакет (`./cmd/<имя>`). Файлы, которые
+программа встраивает через `//go:embed`, лежат рядом с ним, внутри `cmd/<имя>/`. Остальной код —
+в `internal/` или других пакетах модуля.
+
+Имя исполняемого файла `go install` берёт из последнего сегмента пути **пакета**, поэтому
+`go install github.com/owner/<имя>/cmd/<имя>@vX.Y.Z` даёт бинарь с правильным именем.
+
 ## Go-программы: требования для `go install` (необязательно)
 
 Этот раздел применяется, **только если** программу хотят устанавливать через
 `go_install.sh` (то есть штатным `go install`). Для установки через
-`github_install.sh`, `gitea_install.sh` и `local_install.sh` он не нужен: там
+`github_install.sh`, `gitlab_install.sh`, `gitea_install.sh` и `local_install.sh` он не нужен: там
 достаточно общих требований выше, и язык программы значения не имеет.
 
 ### 1. Module path — сетевой адрес
@@ -80,24 +99,7 @@ module <хост-gitea>/<владелец>/<имя>
 качать модуль. Последний сегмент пути модуля совпадает с именем репозитория и именем
 исполняемого файла (п. 1 общих требований).
 
-### 2. Расположение `package main` — `cmd/<имя>/`
-
-Имя исполняемого файла `go install` берёт из последнего сегмента пути **пакета**, а не
-модуля. Поэтому рекомендуемая структура:
-
-```
-<корень>/go.mod            module github.com/owner/<имя>
-<корень>/cmd/<имя>/main.go package main
-```
-
-Тогда `go install github.com/owner/<имя>/cmd/<имя>@vX.Y.Z` даёт бинарь с правильным
-именем. `go_install.sh` пробует этот путь первым.
-
-Вариант с `package main` в корне модуля тоже работает (`go_install.sh` использует его
-как запасной), но библиотечный код в таком модуле нельзя импортировать отдельно от
-`main` — если модуль планируется и как библиотека, используйте `cmd/<имя>/`.
-
-### 3. Зависимости должны быть опубликованы
+### 2. Зависимости должны быть опубликованы
 
 `go install <пакет>@<версия>` собирает модуль в отрыве от рабочей копии:
 
@@ -105,10 +107,11 @@ module <хост-gitea>/<владелец>/<имя>
 - `replace` в самом `go.mod` не поддерживается и приводит к ошибке.
 
 Поэтому каждая внутренняя зависимость должна быть опубликована как отдельный модуль с
-semver-тегом и присутствовать в `go.sum`. Локальные `replace` для разработки держите
-только в `go.work` (он же не мешает `go install`).
+semver-тегом и присутствовать в `go.sum`. Локальных `replace` тоже нет: чтобы использовать
+изменение зависимости, опубликуйте его и обновите vendor (см.
+[vendoring](#go-программы-vendoring-обязательно)).
 
-### 4. Major-версии
+### 3. Major-версии
 
 Начиная с `v2.0.0` путь модуля обязан иметь суффикс с номером major-версии:
 
@@ -119,7 +122,7 @@ module github.com/owner/<имя>/v2
 Иначе `go install <модуль>@v2.0.0` завершится ошибкой. `go_install.sh` учитывает
 суффикс при вычислении имени бинаря.
 
-### 5. Версия при `go install`
+### 4. Версия при `go install`
 
 `versions.txt` остаётся источником истины для релизных workflow и `local_install.sh`.
 Но при `go install` сборка идёт без `-ldflags`, которые проставляет workflow, поэтому
@@ -151,7 +154,7 @@ func Version() string {
 
 ### Семантический тег релиза
 
-Релизы публикуются через GitHub Releases или Gitea Releases. Тег каждого релиза — строго
+Релизы публикуются через GitHub Releases, GitLab Releases или Gitea Releases. Тег каждого релиза — строго
 `vMAJOR.MINOR.PATCH` (например, `v1.2.3`).
 
 ### Версия хранится в `versions.txt`
@@ -260,8 +263,8 @@ channel=gitea-release
 ```
 
 Ключи `origin`, `upstream` и `version` печатаются всегда; `commit` и `channel` опускаются, когда
-неизвестны. `channel` описывает, как получен исполняемый файл: `github-release`, `gitea-release`,
-`local` или `go-install`.
+неизвестны. `channel` описывает, как получен исполняемый файл: `github-release`, `gitlab-release`,
+`gitea-release`, `local` или `go-install`.
 
 Один флаг держит весь набор, поэтому новые атрибуты сборки не требуют каждый раз нового флага —
 только новой строки в выводе.
@@ -297,8 +300,9 @@ esac
 `https://host:2222/o/r` — ssh-порт не равен https-порту. Для такого репозитория origin задаётся в
 цели сборки явно, а не выводится из remote.
 
-В CI нормализация не нужна: `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}` уже каноничен. Release-
-workflow из этого репозитория собирают значение именно так.
+В CI нормализация не нужна: `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}` (GitHub, Gitea) и
+`$CI_PROJECT_URL` (GitLab) уже каноничны. Release-workflow из этого репозитория собирают значение
+именно так.
 
 ### 4. Файл `upstream.txt`
 
@@ -347,6 +351,54 @@ func Origin() string {
 Суффикс мажорной версии (`/v2`, `/v3`) срезается, чтобы URL указывал на репозиторий, а не на module
 path.
 
+## Go-программы: vendoring (обязательно)
+
+Go-программа хранит зависимости в `vendor/` и собирается **только** из него — и в release-workflow,
+и локально (`just build`, `make build`, `local_install.sh`). Сборка не зависит ни от module proxy,
+ни от кэша модулей, ни от соседних рабочих копий, подключённых через `go.work`, поэтому её можно
+повторить в изолированной сети.
+
+- Если в `go.mod` есть директивы `require`, в репозитории лежит `vendor/` с `vendor/modules.txt`,
+  совпадающий с результатом `GOWORK=off go mod vendor`. Модулю без зависимостей `vendor/` не нужен.
+- `vendor/` не входит в `.gitignore`; в `.gitattributes` — `vendor/** linguist-generated=true -diff`.
+- Файл сборки экспортирует `GOWORK=off` и `GOFLAGS=-mod=vendor`, чтобы все рецепты (`build`, `test`,
+  `vet`, `install`, ...) работали только с `vendor/`:
+
+  ```just
+  export GOWORK := "off"
+  export GOFLAGS := "-mod=vendor"
+  ```
+
+  ```make
+  export GOWORK := off
+  export GOFLAGS := -mod=vendor
+  ```
+
+  `go.work` не используется: в репозитории его нет, а `GOWORK=off` ещё и защищает сборку от
+  `go.work` в родительском каталоге (Go ищет его вверх по дереву). Чтобы использовать изменение
+  зависимости, опубликуйте его и запустите `just vendor`.
+- Форматирование не должно трогать `vendor/`: используйте `go fmt ./...`, а не `gofmt -w .`.
+- В файле сборки есть рецепты `vendor` и `vendor-check`. `vendor-check` смотрит в `git status`, а не
+  только в `git diff`, чтобы ловить и файлы, которых не хватает в закоммиченном `vendor/`:
+
+```just
+vendor:
+    GOWORK=off go mod tidy
+    GOWORK=off go mod vendor
+
+vendor-check:
+    GOWORK=off go mod vendor
+    test -z "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)"
+```
+
+После `go get` запустите `just vendor`: иначе сборка упадёт с «inconsistent vendoring». Release-
+workflow выполняют ту же проверку перед сборкой (`GOWORK=off`, `GOFLAGS=-mod=vendor`), а
+`check_install.sh` считает ошибкой репозиторий, не соблюдающий этот раздел.
+
+Vendor не отменяет требований раздела про `go install`: `go install` игнорирует `vendor/`,
+поэтому зависимости по-прежнему публикуются как модули с semver-тегами. Код в `vendor/`
+распространяется вместе с репозиторием — лицензии зависимостей должны это позволять.
+
 ## Рекомендации
 
 ### Статическая сборка
@@ -377,8 +429,30 @@ Origin объявлен самой программой: пересборка м
 
 ### Идемпотентный CI-релиз
 
-Workflow должен проверять существование тега и пропускать сборку, если тег уже есть. Это
-делает повторную отправку в `master` безопасной.
+Если релиз для тега уже существует, workflow пропускает сборку. Это делает повторную отправку в
+`master` безопасной и подходит для платформ, где тег приходит синхронизацией зеркала. GitHub- и
+Gitea-шаблоны проверяют тег, GitLab-шаблон — релиз.
+
+### Release-workflow запускается только на своём публичном домене
+
+GitHub-шаблон выполняется только на `github.com`, GitLab-шаблон — только на `gitlab.com`:
+
+```yaml
+# .github/workflows/release.yml
+jobs:
+  release:
+    if: github.server_url == 'https://github.com'
+
+# .gitlab-ci.yml
+release:
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+```
+
+В зеркалах на других инстансах (приватный GitHub Enterprise, внутренний GitLab, Gitea, читающая
+`.github/workflows`) job пропускается. Такие зеркала собирают релизы своими средствами; конвенции
+это не регламентируют. `check_install.sh` считает ошибкой GitHub / GitLab release-workflow без
+такой защиты.
 
 ### Переиспользуемый workflow
 
@@ -387,13 +461,31 @@ Workflow должен проверять существование тега и 
 `SHA256SUMS`, идемпотентность.
 
 - GitHub Actions: `workflows/release.yml` → `.github/workflows/release.yml`
+- GitLab CI: `workflows/release-gitlab.yml` → `.gitlab-ci.yml`
 - Gitea Actions: `workflows/release-gitea.yml` → `.gitea/workflows/release.yml`
 
+Для shell-программ: `release-sh.yml`, `release-sh-gitlab.yml`, `release-sh-gitea.yml`.
+
 Шаблоны взаимозаменяемы: имена архивов, `SHA256SUMS` и формат тега `vX.Y.Z` совпадают, так что
-релиз с любой из платформ устанавливается одним и тем же `github_install.sh`. Gitea-шаблон не
+установщики всех платформ работают одинаково. GitLab-шаблон загружает архивы в generic package
+registry проекта и прикладывает их к релизу ссылками (release links, а не attachments); на push в
+основную ветку он создаёт релиз и, если тег ещё не пришёл из зеркала, — тег. Gitea-шаблон не
 использует внешних actions (checkout, установка Go и публикация релиза — шаги `run:` на shell,
 релиз создаётся через Gitea API), поэтому работает и там, где раннер не может скачивать actions
 с github.com.
+
+### Источники установщиков
+
+- `github_install.sh` берёт инстанс из `-s` / `GITHUB_URL` (по умолчанию `https://github.com`), API —
+  из `GITHUB_API_URL` (по умолчанию `https://api.github.com`, для других инстансов
+  `<GITHUB_URL>/api/v3`), токен — из `GITHUB_TOKEN`;
+- `gitlab_install.sh` берёт инстанс из `-s` / `GITLAB_URL` (по умолчанию `https://gitlab.com`),
+  токен — из `GITLAB_TOKEN` (scope `read_api`);
+- `gitea_install.sh` берёт инстанс из `-s` / `GITEA_URL`, токен — из `GITEA_TOKEN`;
+- `go_install.sh` всегда устанавливает из публичного `github.com` через стандартный механизм модулей
+  Go и игнорирует `GITHUB_URL` / `GITLAB_URL`: `go install` находит модуль по пути, а не по URL,
+  поэтому установка из зеркала потребовала бы перенаправления git и решения вопроса с checksum
+  database. Для зеркал используйте release-установщики.
 
 ### Создание и проверка
 
@@ -406,9 +498,12 @@ init_install.sh --lang sh <name>
 ```
 
 Он пишет `versions.txt`, `justfile` с рецептами `build` / `bump-*` / `release`, `.gitignore`,
-workflow релиза и скелет с `--version` / `--origin` / `--buildinfo` (для Go — через
-`install-libs/buildinfo`).
+workflow релиза (`--ci github,gitlab,gitea`, `all`, `none`) и скелет с `--version` / `--origin` /
+`--buildinfo` (для Go — через `install-libs/buildinfo`). Для Go он ещё заполняет `vendor/`,
+`.gitattributes`, экспорт `GOWORK` / `GOFLAGS` и рецепты `vendor` / `vendor-check`.
 
-Существующий репозиторий проверяется `check_install.sh` (с `--build` он ещё и собирает бинарь и
-смотрит вывод флагов), а `check_install.sh --fix` дописывает недостающее: `versions.txt`,
-`.gitignore`, рецепты `bump-*` и workflow релиза.
+Существующий репозиторий проверяется `check_install.sh` (с `--build` он ещё и собирает бинарь,
+смотрит вывод флагов и проверяет согласованность `vendor/`), а `check_install.sh --fix` дописывает
+недостающее: `versions.txt`, `.gitignore`, рецепты `bump-*`, workflow релиза и, для Go, `vendor/`,
+`.gitattributes`, экспорт `GOWORK` / `GOFLAGS` и рецепты `vendor-*` (для `Makefile` — только
+подсказка).

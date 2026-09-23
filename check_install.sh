@@ -9,7 +9,9 @@ Checks whether a repository follows the conventions from CONVENTIONS.md.
 
   --build       additionally build the binary and check its --version output
   --fix         create the missing files and recipes before checking
-                (versions.txt, .gitignore, bump-* recipes, release workflow)
+                (versions.txt, .gitignore, bump-* recipes, release workflow;
+                go: vendor/, .gitattributes, GOWORK/GOFLAGS exports and
+                vendor/vendor-check recipes in the justfile)
   -h, --help    show this help
 
   [path]  path to the repository: an absolute path, or a name or relative
@@ -103,6 +105,11 @@ else
     REPO_LANG=sh
 fi
 
+GO_HAS_DEPS=0
+if [ "$REPO_LANG" = "go" ] && grep -Eq '^[[:space:]]*require[[:space:]]' "$REPO_DIR/go.mod"; then
+    GO_HAS_DEPS=1
+fi
+
 if [ "$DO_FIX" = "1" ]; then
     INITER=""
     _self_dir=$(cd "$(dirname "$0")" && pwd)
@@ -162,9 +169,56 @@ if [ "$DO_FIX" = "1" ]; then
         fi
     fi
 
+    if [ "$GO_HAS_DEPS" = "1" ] && [ ! -f "$REPO_DIR/vendor/modules.txt" ]; then
+        if ! command -v go >/dev/null 2>&1; then
+            fixed "go not found - run 'GOWORK=off go mod vendor' by hand"
+        elif (cd "$REPO_DIR" && GOWORK=off go mod vendor >/dev/null 2>&1); then
+            fixed "created vendor/ (GOWORK=off go mod vendor)"
+        else
+            fixed "GOWORK=off go mod vendor failed - run it by hand"
+        fi
+    fi
+
+    if [ "$REPO_LANG" = "go" ] && [ -n "$_jf" ] \
+       && ! grep -Eq '^export[[:space:]]+GOFLAGS[[:space:]]*:=.*-mod=vendor' "$_jf"; then
+        [ -n "$(tail -c1 "$_jf")" ] && printf '\n' >> "$_jf"
+        printf '\n' >> "$_jf"
+        "$INITER" --emit vendor-env >> "$_jf"
+        fixed "appended 'export GOWORK/GOFLAGS' to $(basename "$_jf") - builds use vendor/ only"
+    elif [ "$REPO_LANG" = "go" ] && [ -z "$_jf" ] \
+       && { [ -f "$REPO_DIR/Makefile" ] || [ -f "$REPO_DIR/makefile" ]; }; then
+        _mf="$REPO_DIR/Makefile"; [ -f "$_mf" ] || _mf="$REPO_DIR/makefile"
+        if ! grep -Eq '^export[[:space:]]+GOFLAGS[[:space:]]*:=.*-mod=vendor' "$_mf"; then
+            fixed "Makefile is not edited automatically - add 'export GOWORK := off' and 'export GOFLAGS := -mod=vendor' by hand"
+        fi
+    fi
+
+    if [ "$REPO_LANG" = "go" ] && [ -d "$REPO_DIR/vendor" ]; then
+        _ga="$REPO_DIR/.gitattributes"
+        if [ ! -f "$_ga" ] || ! grep -Eq '^/?vendor/' "$_ga"; then
+            [ -f "$_ga" ] && [ -n "$(tail -c1 "$_ga")" ] && printf '\n' >> "$_ga"
+            "$INITER" --emit gitattributes-vendor >> "$_ga"
+            fixed "added vendor/ to .gitattributes"
+        fi
+        if [ -n "$_jf" ]; then
+            if ! grep -Eq '^vendor-check( |:)' "$_jf"; then
+                [ -n "$(tail -c1 "$_jf")" ] && printf '\n' >> "$_jf"
+                printf '\n' >> "$_jf"
+                "$INITER" --emit vendor-recipes >> "$_jf"
+                fixed "appended the vendor/vendor-check recipes to $(basename "$_jf")"
+            fi
+        elif [ -f "$REPO_DIR/Makefile" ] || [ -f "$REPO_DIR/makefile" ]; then
+            _mf="$REPO_DIR/Makefile"; [ -f "$_mf" ] || _mf="$REPO_DIR/makefile"
+            if ! grep -Eq '^vendor-check( |:)' "$_mf"; then
+                fixed "Makefile is not edited automatically - add the vendor/vendor-check targets by hand (see CONVENTIONS.md)"
+            fi
+        fi
+    fi
+
     _wf_any=0
     for _f in "$REPO_DIR"/.github/workflows/*.yml "$REPO_DIR"/.github/workflows/*.yaml \
-              "$REPO_DIR"/.gitea/workflows/*.yml "$REPO_DIR"/.gitea/workflows/*.yaml; do
+              "$REPO_DIR"/.gitea/workflows/*.yml "$REPO_DIR"/.gitea/workflows/*.yaml \
+              "$REPO_DIR"/.gitlab-ci.yml; do
         [ -f "$_f" ] && _wf_any=1
     done
     if [ "$_wf_any" = "0" ]; then
@@ -259,13 +313,14 @@ echo "Release workflow:"
 _wf_found=0
 WF_FILES=""
 for _f in "$REPO_DIR"/.github/workflows/*.yml "$REPO_DIR"/.github/workflows/*.yaml \
-          "$REPO_DIR"/.gitea/workflows/*.yml "$REPO_DIR"/.gitea/workflows/*.yaml; do
+          "$REPO_DIR"/.gitea/workflows/*.yml "$REPO_DIR"/.gitea/workflows/*.yaml \
+          "$REPO_DIR"/.gitlab-ci.yml; do
     [ -f "$_f" ] || continue
     _wf_found=1
     WF_FILES="$WF_FILES $_f"
 done
 if [ "$_wf_found" = "1" ]; then
-    ok ".github/workflows/*.yml or .gitea/workflows/*.yml found"
+    ok "release workflow found (.github/workflows, .gitea/workflows or .gitlab-ci.yml)"
     if grep -lq 'SHA256SUMS' $WF_FILES 2>/dev/null; then
         ok "the workflow generates SHA256SUMS"
     else
@@ -276,8 +331,26 @@ if [ "$_wf_found" = "1" ]; then
     else
         warn "the release workflow does not look like the template from this repository (no per-platform archives)"
     fi
+    for _f in $WF_FILES; do
+        grep -q 'SHA256SUMS' "$_f" 2>/dev/null || continue
+        _rel=${_f#"$REPO_DIR"/}
+        case "$_rel" in
+            .github/*)
+                if grep -Fq "github.server_url == 'https://github.com'" "$_f"; then
+                    ok "$_rel runs only on github.com"
+                else
+                    fail "$_rel has no domain guard - add: if: github.server_url == 'https://github.com' (see CONVENTIONS.md)"
+                fi ;;
+            .gitlab-ci.yml)
+                if grep -Fq '$CI_SERVER_HOST == "gitlab.com"' "$_f"; then
+                    ok "$_rel runs only on gitlab.com"
+                else
+                    fail "$_rel has no domain guard - add the rule: \$CI_SERVER_HOST == \"gitlab.com\" (see CONVENTIONS.md)"
+                fi ;;
+        esac
+    done
 else
-    warn "no .github/workflows/*.yml and no .gitea/workflows/*.yml (releases will not be published automatically)"
+    warn "no .github/workflows/*.yml, .gitea/workflows/*.yml or .gitlab-ci.yml (releases will not be published automatically)"
 fi
 
 # --- git tags (recommended) ---
@@ -380,20 +453,69 @@ if [ -f "$REPO_DIR/go.mod" ]; then
         fi
     fi
     if grep -Eq '^[[:space:]]*replace[[:space:]]' "$REPO_DIR/go.mod"; then
-        warn "go.mod has a replace directive - go install does not support it (keep local replaces in go.work)"
+        warn "go.mod has a replace directive - go install does not support it (publish the dependency and vendor it)"
     else
         ok "no replace directives in go.mod"
     fi
     if [ -d "$REPO_DIR/cmd/$BIN" ] && grep -rlq '^package main' "$REPO_DIR/cmd/$BIN" 2>/dev/null; then
         ok "package main in cmd/$BIN/"
-    elif grep -lq '^package main' "$REPO_DIR"/*.go 2>/dev/null; then
-        warn "package main lives in the module root - go install works, but the library code cannot be imported separately (cmd/$BIN/ is recommended)"
     else
-        warn "no package main in cmd/$BIN/ and none in the module root"
+        fail "no package main in cmd/$BIN/ - the release workflow builds ./cmd/$BIN (see CONVENTIONS.md)"
+    fi
+    if grep -lq '^package main' "$REPO_DIR"/*.go 2>/dev/null; then
+        fail "package main in the module root - move it to cmd/$BIN/"
+    fi
+    echo "Go (vendor):"
+    if [ "$GO_HAS_DEPS" = "0" ]; then
+        ok "go.mod has no dependencies - vendor/ is not needed"
+    elif [ -f "$REPO_DIR/vendor/modules.txt" ]; then
+        ok "vendor/modules.txt found"
+    else
+        fail "no vendor/modules.txt - dependencies must be vendored: GOWORK=off go mod vendor"
+    fi
+    if [ -f "$REPO_DIR/.gitignore" ] && grep -Eq '^/?vendor/?$' "$REPO_DIR/.gitignore"; then
+        fail "vendor/ is listed in .gitignore - it must be committed"
+    fi
+    if [ -f "$REPO_DIR/go.work" ]; then
+        warn "go.work found - builds ignore it (GOWORK=off) and dependencies come from vendor/; remove it"
+    fi
+    if [ -d "$REPO_DIR/vendor" ]; then
+        if [ -f "$REPO_DIR/.gitattributes" ] && grep -Eq '^/?vendor/' "$REPO_DIR/.gitattributes"; then
+            ok ".gitattributes marks vendor/"
+        else
+            warn ".gitattributes has no line for vendor/ - add: vendor/** linguist-generated=true -diff"
+        fi
+    fi
+    if [ -n "$BUILD_FILE" ]; then
+        if grep -Eq '^export[[:space:]]+GOFLAGS[[:space:]]*:?=.*-mod=vendor' "$BUILD_FILE" 2>/dev/null \
+           && grep -Eq '^export[[:space:]]+GOWORK[[:space:]]*:?=[[:space:]]*"?off' "$BUILD_FILE" 2>/dev/null; then
+            ok "$(basename "$BUILD_FILE") builds from vendor/ only (GOWORK=off, GOFLAGS=-mod=vendor)"
+        else
+            fail "$(basename "$BUILD_FILE") must export GOWORK=off and GOFLAGS=-mod=vendor (see CONVENTIONS.md)"
+        fi
+        if [ "$GO_HAS_DEPS" = "1" ]; then
+            if grep -Eq '^vendor-check( |:)' "$BUILD_FILE" 2>/dev/null; then
+                ok "vendor-check recipe present in $(basename "$BUILD_FILE")"
+            else
+                fail "no vendor-check recipe in $(basename "$BUILD_FILE") (see CONVENTIONS.md)"
+            fi
+        fi
     fi
 fi
 
 # --- optional build and --version check ---
+
+if [ "$DO_BUILD" = "1" ] && [ "$GO_HAS_DEPS" = "1" ]; then
+    echo "Vendor consistency (--build):"
+    if ! command -v go >/dev/null 2>&1; then
+        warn "go not found - vendor/ was not checked"
+    elif _vout=$(cd "$REPO_DIR" && GOWORK=off go list -mod=vendor ./... 2>&1 >/dev/null); then
+        ok "vendor/ matches go.mod (GOWORK=off go list -mod=vendor ./...)"
+    else
+        fail "vendor/ is inconsistent with go.mod - run: GOWORK=off go mod vendor"
+        printf '%s\n' "$_vout" | head -5 | sed 's/^/         /'
+    fi
+fi
 
 if [ "$DO_BUILD" = "1" ]; then
     echo "Build and --version (--build):"
