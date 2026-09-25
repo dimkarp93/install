@@ -520,6 +520,41 @@ if [ -f "$REPO_DIR/go.mod" ]; then
             fi
         fi
     fi
+    if [ "$MOD" != "github.com/dimkarp93/install-libs" ]; then
+        echo "Go (install-libs):"
+        LIBS_MIN=0.3.0
+        LIBS_VER=$(awk '$1 == "github.com/dimkarp93/install-libs" {print $2; exit} $1 == "require" && $2 == "github.com/dimkarp93/install-libs" {print $3; exit}' "$REPO_DIR/go.mod")
+        LIBS_VER=${LIBS_VER#v}
+        if [ -z "$LIBS_VER" ]; then
+            warn "go.mod does not require github.com/dimkarp93/install-libs"
+        elif semver_le "$LIBS_MIN" "$LIBS_VER"; then
+            ok "install-libs v$LIBS_VER has xdgpath, envflag and shellcomplete"
+        else
+            warn "install-libs v$LIBS_VER is older than v$LIBS_MIN - xdgpath, envflag and shellcomplete are missing"
+        fi
+        GO_SRC=$(grep -rlE --include='*.go' --exclude='*_test.go' --exclude-dir=vendor --exclude-dir=.git \
+            'Getenv\("XDG_CONFIG_HOME"\)|LookupEnv\("XDG_CONFIG_HOME"\)|"\.config"' "$REPO_DIR" 2>/dev/null || true)
+        if [ -n "$GO_SRC" ]; then
+            for _f in $GO_SRC; do
+                warn "hand-made config path resolution in ${_f#"$REPO_DIR"/} - use install-libs/xdgpath"
+            done
+        else
+            ok "no hand-made config path resolution"
+        fi
+        FLAG_COUNT=$( { grep -rhE --include='*.go' --exclude='*_test.go' --exclude-dir=vendor --exclude-dir=.git \
+                '^[[:space:]]*case[[:space:]].*"--?[a-z]' "$REPO_DIR" 2>/dev/null | grep -oE '"--?[a-z][a-z0-9-]*' || true ;
+            grep -rhoE --include='*.go' --exclude='*_test.go' --exclude-dir=vendor --exclude-dir=.git \
+                '\.(Bool|String|Int|Int64|Uint|Uint64|Float64|Duration|Func|BoolFunc|Var|BoolVar|StringVar|IntVar|Int64Var|UintVar|DurationVar|Float64Var|TextVar)\([^"]*"[A-Za-z][A-Za-z0-9-]*"' \
+                "$REPO_DIR" 2>/dev/null | grep -oE '"[A-Za-z][A-Za-z0-9-]*"$' || true ; } \
+            | tr -d '"' | sed 's/^-*//' | { grep -vxE 'version|origin|buildinfo|v|h|help|envs' || true; } | sort -u | wc -l | tr -d ' ')
+        if grep -rqE --include='*.go' --exclude-dir=vendor --exclude-dir=.git 'install-libs/shellcomplete|"__complete"' "$REPO_DIR" 2>/dev/null; then
+            ok "shell completion (__complete) found"
+        elif [ "$FLAG_COUNT" -gt 3 ]; then
+            warn "about $FLAG_COUNT flags and no shell completion - add install-libs/shellcomplete (see CONVENTIONS.md)"
+        else
+            ok "few flags ($FLAG_COUNT) - shell completion is optional"
+        fi
+    fi
 fi
 
 # --- optional build and --version check ---
