@@ -442,6 +442,32 @@ Vendoring does not lift the requirements of the `go install` section: `go instal
 `vendor/`, so dependencies are still published as modules with semver tags. The code in `vendor/` is
 redistributed together with the repository — the licenses of the dependencies must allow that.
 
+## Go programs: config, environment, completion (install-libs)
+
+Required for new Go programs and the target state for existing ones. The mechanisms live in the
+[`install-libs`](https://github.com/dimkarp93/install-libs) packages from `v0.3.0` on; the
+concrete values (the application name, the variable prefix, the command tree) stay in the
+program.
+
+- **The config path** goes only through `install-libs/xdgpath`: `ConfigDir(app)` honours
+  `XDG_CONFIG_HOME` and defaults to `~/.config/<app>`, `ExpandHome` expands `~` in user input,
+  `Resolve` applies an explicit override (`--config`). A program that used to hardcode
+  `~/.config/<app>` wraps the path in `WithLegacy`, so the old file keeps being read. The code
+  has no `os.Getenv("XDG_CONFIG_HOME")` or `filepath.Join(home, ".config")` of its own.
+- **Options worth overriding through the environment** (network settings, timeouts, modes) go
+  through `install-libs/envflag`: the priority is `flag > variable > default`, and every
+  variable shares a prefix (`NET_`, `MONO_`, ...). The `--envs` option as the first argument
+  prints one `NAME=value (default|env|flag)` line per variable.
+- **Shell completion** goes through `install-libs/shellcomplete` when a program has more than
+  three subcommands or flags. The program passes its arguments to `Spec.Handle` before its own
+  parsing; this gives `completion bash|zsh` (a script to `source`), `install-completions` /
+  `uninstall-completions` (a file under `$XDG_DATA_HOME` and a marked line in `~/.bashrc` /
+  `~/.zshrc`) and the hidden `__complete` the script calls on every TAB. The model is
+  `git-repos`.
+
+`check_install.sh` checks this section softly: an outdated `install-libs`, hand-made `~/.config`
+resolution and a missing `__complete` are warnings, not errors.
+
 ## Recommendations
 
 ### Static build
