@@ -189,7 +189,7 @@ func Version() string {
 
 1. коммитит только `versions.txt` с сообщением `bump <patch|minor|major>`;
 2. ставит тег `vX.Y.Z` (если такой тег уже есть — отказывается и возвращает `versions.txt`);
-3. выполняет `git push <remote> HEAD --tags` для каждого remote из `git remote`.
+3. выполняет `git push origin HEAD --tags` — только в `origin`, остальные remote (зеркала) не трогает.
 
 Пример целей для `Justfile`:
 
@@ -235,12 +235,8 @@ _bump-commit level:
     fi
     git commit -q -m "bump {{level}}" -- versions.txt
     git tag "v$v"
-    rc=0
-    for r in $(git remote); do
-        git push -q "$r" HEAD --tags || { echo "push to $r failed" >&2; rc=1; }
-    done
+    git push -q origin HEAD --tags
     echo "Tagged v$v"
-    exit "$rc"
 ```
 
 В `Makefile` те же шаги живут во вспомогательной цели, которую вызывает каждая `bump-*`:
@@ -259,10 +255,8 @@ _bump-commit:
 		git checkout -- versions.txt; echo "tag v$$v already exists" >&2; exit 1; \
 	fi; \
 	git commit -q -m "bump $(LEVEL)" -- versions.txt && git tag "v$$v" || exit 1; \
-	rc=0; for r in $$(git remote); do \
-		git push -q "$$r" HEAD --tags || { echo "push to $$r failed" >&2; rc=1; }; \
-	done; \
-	echo "Tagged v$$v"; exit $$rc
+	git push -q origin HEAD --tags; \
+	echo "Tagged v$$v"
 ```
 
 Выпуск новой версии — одна команда: `just bump-patch` / `make bump-patch` (или `bump-minor` /

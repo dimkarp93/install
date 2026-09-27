@@ -185,7 +185,7 @@ and then publishes it:
 
 1. commits `versions.txt` alone with the message `bump <patch|minor|major>`;
 2. creates the tag `vX.Y.Z` (refusing and restoring `versions.txt` if the tag already exists);
-3. runs `git push <remote> HEAD --tags` for every remote from `git remote`.
+3. runs `git push origin HEAD --tags` — only to `origin`; other remotes (mirrors) are left alone.
 
 An example of the targets for a `Justfile`:
 
@@ -231,12 +231,8 @@ _bump-commit level:
     fi
     git commit -q -m "bump {{level}}" -- versions.txt
     git tag "v$v"
-    rc=0
-    for r in $(git remote); do
-        git push -q "$r" HEAD --tags || { echo "push to $r failed" >&2; rc=1; }
-    done
+    git push -q origin HEAD --tags
     echo "Tagged v$v"
-    exit "$rc"
 ```
 
 For a `Makefile` the same steps live in a helper target that every `bump-*` target calls:
@@ -255,10 +251,8 @@ _bump-commit:
 		git checkout -- versions.txt; echo "tag v$$v already exists" >&2; exit 1; \
 	fi; \
 	git commit -q -m "bump $(LEVEL)" -- versions.txt && git tag "v$$v" || exit 1; \
-	rc=0; for r in $$(git remote); do \
-		git push -q "$$r" HEAD --tags || { echo "push to $$r failed" >&2; rc=1; }; \
-	done; \
-	echo "Tagged v$$v"; exit $$rc
+	git push -q origin HEAD --tags; \
+	echo "Tagged v$$v"
 ```
 
 Cutting a new version is a single command: `just bump-patch` / `make bump-patch` (or `bump-minor` /
