@@ -644,6 +644,29 @@ if [ "$DO_BUILD" = "1" ]; then
                     fi
                 fi
             fi
+
+            echo "Help (--build):"
+            _help_ok=1
+            for _hf in -h --help -help; do
+                if ! "$BIN_PATH" "$_hf" >/dev/null 2>&1; then
+                    fail "'$_hf' exits non-zero (should print help and exit 0)"
+                    _help_ok=0
+                fi
+            done
+            [ "$_help_ok" = "1" ] && ok "-h, --help and -help all exit 0"
+            if "$BIN_PATH" help >/dev/null 2>&1; then
+                ok "'help' also prints it and exits 0"
+            else
+                warn "'help' does not exit 0 - fine only for a flags-only program, otherwise add it (see CONVENTIONS.md)"
+            fi
+            _help_text=$("$BIN_PATH" -h 2>&1 || true)
+            if grep -rqE --include='*.go' --exclude-dir=vendor --exclude-dir=.git 'install-libs/shellcomplete' "$REPO_DIR" 2>/dev/null; then
+                if printf '%s\n' "$_help_text" | grep -q 'completion' && printf '%s\n' "$_help_text" | grep -q 'install-completions'; then
+                    ok "-h lists completion / install-completions / uninstall-completions"
+                else
+                    warn "-h does not mention completion/install-completions - list them (see CONVENTIONS.md)"
+                fi
+            fi
         fi
     else
         fail "the build ($BUILD_CMD) failed"

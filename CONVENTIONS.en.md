@@ -457,10 +457,27 @@ program.
   parsing; this gives `completion bash|zsh` (a script to `source`), `install-completions` /
   `uninstall-completions` (a file under `$XDG_DATA_HOME` and a marked line in `~/.bashrc` /
   `~/.zshrc`) and the hidden `__complete` the script calls on every TAB. The model is
-  `git-repos`.
+  `git-repos`. All three visible commands (`completion`, `install-completions`,
+  `uninstall-completions`) must be listed in the help output (`-h`/`--help`), the same as any
+  other command the program has — the help text should not stay silent about a mechanism the
+  program itself wires in.
 
 `check_install.sh` checks this section softly: an outdated `install-libs`, hand-made `~/.config`
 resolution and a missing `__complete` are warnings, not errors.
+
+### Help (`-h`/`--help`)
+
+Required for every program, regardless of language:
+
+- `-h`, `--help` and `-help` are equivalent and print the help text with exit code `0`;
+- if the program has subcommands, the bare word `help` as the first argument does the same; a
+  program with no subcommands (flags only) may skip `help` as a separate word, but must not
+  silently treat it as an ordinary positional argument — an unrecognised argument is an error
+  with a non-zero exit code and the help text, not an attempt to run the program's main action
+  with that value;
+- the help text lists every visible command the program has, including `completion` /
+  `install-completions` / `uninstall-completions` when they are wired in (see above), and the
+  `--version`/`-v`, `--origin`, `--buildinfo` flags.
 
 ## Recommendations
 
