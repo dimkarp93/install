@@ -533,7 +533,8 @@ if [ -f "$REPO_DIR/go.mod" ]; then
             warn "install-libs v$LIBS_VER is older than v$LIBS_MIN - xdgpath, envflag and shellcomplete are missing"
         fi
         GO_SRC=$(grep -rlE --include='*.go' --exclude='*_test.go' --exclude-dir=vendor --exclude-dir=.git \
-            'Getenv\("XDG_CONFIG_HOME"\)|LookupEnv\("XDG_CONFIG_HOME"\)|"\.config"' "$REPO_DIR" 2>/dev/null || true)
+            'Getenv\("XDG_CONFIG_HOME"\)|LookupEnv\("XDG_CONFIG_HOME"\)|"\.config"' "$REPO_DIR" 2>/dev/null | \
+            xargs -r grep -LF 'install-libs/xdgpath' || true)
         if [ -n "$GO_SRC" ]; then
             for _f in $GO_SRC; do
                 warn "hand-made config path resolution in ${_f#"$REPO_DIR"/} - use install-libs/xdgpath"
